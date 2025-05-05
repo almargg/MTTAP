@@ -1,56 +1,24 @@
 import torch
 from dataset.Dataloader import KubricDataset, TapvidDavisFirst, TapData
 from models.Model import GluTracker
-from models.utils.Loss import tap_loss, coTrack_loss
+from models.utils.Loss import tap_loss, coTrack_loss, pixel_pred_loss
 from utils.Metrics import compute_metrics, compute_avg_distance
 
 
 
-def train(model, loader, loss_function, optimiser, device):
-    model.train()
-    total = 0
-    running_loss = 0
-    avg_dist = 0
+def train(model: GluTracker, loader, loss_function, optimiser, device):
+    loss_sum = 0
+    iter = 0
     for i, (frames, trajs, vsbls, qrs) in enumerate(loader):
         frames, trajs, vsbls, qrs = frames.to(device), trajs.to(device), vsbls.to(device), qrs.to(device)
         optimiser.zero_grad()
-        loss = 0
-        for b in range(frames.shape[0]): #Run each batch seperately as dimensions of tracked points are not guaranteed to match
-            for j in range(frames.shape[1] - 1):
-                trajs_ = trajs[b, j, :, :] # N, 2
-                qrs_msk = qrs[b,:,0] <= j #N
-                queries = trajs_[qrs_msk]
-
-                frames_ = torch.stack([frames[b,j,:,:,:], frames[b,j+1,:,:,:]], dim=0)
-
-                queries = torch.unsqueeze(queries, 0)
-                frames_ = torch.unsqueeze(frames_, 0)
-
-                #Make sure we have queries to track
-                if queries.shape[1] == 0:
-                    continue
-
-                pred_pose, pred_vis = model(queries, frames_)
-
-                gt_traj = trajs[b, j+1, :, :][qrs_msk] 
-                avg_dist += compute_avg_distance(gt_traj, pred_pose)
-
-
-                loss += loss_function(torch.unsqueeze(trajs[b, j+1, :, :][qrs_msk, 0:], 0), torch.unsqueeze(vsbls[b, j+1, :][qrs_msk],0), pred_pose, pred_vis)
-                
-                running_loss += loss.item()
-                total += 1
-                if torch.isnan(loss):
-                    print(f"Loss became nan at frame: {j} in batch {b}")
-
-        loss.backward()
+        loss_sum += model.train_video(qrs, frames, trajs, vsbls, loss_function)
+        iter += 1
         optimiser.step()
-
-        if i == 1000:
-            print(f"Average pixel distance while training was {(avg_dist/(i+1))}")
+        if i == 100:
             break
+    return loss_sum / iter
 
-    return running_loss / total
 
 def validate(model, loader, device):
     model.eval()
@@ -114,9 +82,9 @@ def validate(model, loader, device):
 
 
 def main():
-    lr = 5e-5
+    lr = 1e-3
     batch_size = 1
-    epochs = 30
+    epochs = 10
 
     train_dataset = KubricDataset("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/kubric/kubric_movi_f_120_frames_dense/movi_f")
     val_dataset = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
@@ -130,9 +98,11 @@ def main():
 
     print(f"Loaded model of {sum(p.numel() for p in model.parameters())} Parameters")
 
-    loss_fnct = coTrack_loss
+    loss_fnct = pixel_pred_loss
 
     optimiser = torch.optim.AdamW(model.parameters(), lr=lr)
+
+    model.use_trained_fnet()
     #model.load()
     #optimiser = torch.optim.SGD(model.parameters(), lr=lr)
 

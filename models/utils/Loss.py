@@ -31,8 +31,36 @@ def coTrack_loss(pos_gt: torch.Tensor, vis_gt: torch.Tensor, pos_pred: torch.Ten
     loss_vis = loss(vis_pred, vis_gt)
 
     #Add confidence
+    return loss_track + loss_vis
+
+def pixel_pred_loss(pred, vis, d_traj, gt_vis, H, W):
+    B, N, _ = d_traj.shape
+    l = pred.shape[1]
+    r = (l-1)/2
+    gt_center_y = d_traj[:, :, 1] * (H-1)
+    gt_center_x = d_traj[:, :, 0] * (W-1)
+    gt_pred = torch.zeros(N, l, l)#H, W
+    for h in range(l):
+        for w in range(l):
+            center_y = h - r 
+            center_y = torch.tensor(center_y).repeat(1, N)
+            center_x = w - r
+            center_x = torch.tensor(center_x).repeat(1, N)
+            y_overlap = torch.clamp(torch.min(center_y, gt_center_y) - torch.max(center_y, gt_center_y) + 1, min=0)
+            x_overlap = torch.clamp(torch.min(center_x, gt_center_x) - torch.max(center_x, gt_center_x) + 1, min=0)
+            gt_pred[:, h, w] = y_overlap * x_overlap
+    #Normalise to 1
+    #gt_pred = torch.reshape(gt_pred, (N, l*l))
+
+    loss_track = torch.mean(torch.abs(gt_pred - pred))
+
+    loss = nn.BCELoss()
+    loss_vis = loss(vis, gt_vis)
 
     return loss_track + loss_vis
+
+
+
 
 
     
