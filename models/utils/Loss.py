@@ -37,15 +37,16 @@ def pixel_pred_loss(pred, vis, d_traj, gt_vis, H, W):
     B, N, _ = d_traj.shape
     l = pred.shape[1]
     r = (l-1)/2
+    device = d_traj.device
     gt_center_y = d_traj[:, :, 1] * (H-1)
     gt_center_x = d_traj[:, :, 0] * (W-1)
     gt_pred = torch.zeros(N, l, l)#H, W
     for h in range(l):
         for w in range(l):
             center_y = h - r 
-            center_y = torch.tensor(center_y).repeat(1, N)
+            center_y = torch.tensor(center_y).repeat(1, N).to(device)
             center_x = w - r
-            center_x = torch.tensor(center_x).repeat(1, N)
+            center_x = torch.tensor(center_x).repeat(1, N).to(device)
             y_overlap = torch.clamp(torch.min(center_y, gt_center_y) - torch.max(center_y, gt_center_y) + 1, min=0)
             x_overlap = torch.clamp(torch.min(center_x, gt_center_x) - torch.max(center_x, gt_center_x) + 1, min=0)
             gt_pred[:, h, w] = y_overlap * x_overlap
