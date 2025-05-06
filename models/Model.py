@@ -7,7 +7,7 @@ import numpy as np
 
 
 class GluTracker(nn.Module):
-    def __init__(self, n_corr_lvl=2, r_win=1, stride=4, latent_dim=128, save_dir = "/scratch_net/biwidl304/amarugg/gluTracker/weights"):
+    def __init__(self, n_corr_lvl=3, r_win=1, stride=4, latent_dim=128, save_dir = "/scratch_net/biwidl304/amarugg/gluTracker/weights"):
         super().__init__()
         self.fnet = BasicEncoder(stride=stride)
         print(f"Feature Net consisting of {sum(p.numel() for p in self.fnet.parameters())} Parameters")
@@ -25,7 +25,7 @@ class GluTracker(nn.Module):
         torch.save(self.state_dict(), self.safe_dir + "/gluTracker.pth")
 
     def load(self):
-        self.load_state_dict(torch.load(self.safe_dir + "/gluTracker.pth", weights_only=True))
+        self.load_state_dict(torch.load(self.safe_dir + "/gluTracker.pth", map_location='cpu', weights_only=True))
 
     def use_trained_fnet(self):
         self.fnet.load_state_dict(torch.load(self.safe_dir + "/fnet.pth", weights_only=True))

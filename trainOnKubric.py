@@ -1,10 +1,12 @@
 import torch
+from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
+import os
 from dataset.Dataloader import KubricDataset, TapvidDavisFirst, TapData
 from models.Model import GluTracker
 from models.utils.Loss import tap_loss, coTrack_loss, pixel_pred_loss
 from utils.Metrics import compute_metrics, compute_avg_distance
-
-
+from utils.Visualise import create_tap_vid
 
 def train(model: GluTracker, loader, loss_function, optimiser, device):
     loss_sum = 0
@@ -15,12 +17,13 @@ def train(model: GluTracker, loader, loss_function, optimiser, device):
         loss_sum += model.train_video(qrs, frames, trajs, vsbls, loss_function)
         iter += 1
         optimiser.step()
-        if i == 100:
+        if i == 1000:
             break
     return loss_sum / iter
 
 
-def validate(model, loader, device):
+def validate(model, loader, device, writer: SummaryWriter, epoch):
+    vis_all_n_epoch = 5
     model.eval()
 
     with torch.no_grad():
@@ -76,15 +79,31 @@ def validate(model, loader, device):
             occ += avg_occ_acc
             jac += avg_jac
             n += 1
-        print(f"Average threshold accuracy: {thr_acc/n}")
-        print(f"Occlusion accuracy: {occ/n}")
-        print(f"Average Jaccard: {jac/n}")
+
+            if (epoch % vis_all_n_epoch) == 0:
+                if (i % 10) == 0:
+                    video = create_tap_vid(pred)
+                    writer.add_video(f"TapVidDavis_{i}", video[None, :, :, :, :], epoch, fps=10)
+
+        writer.add_scalar("AVGThreshold", thr_acc, epoch)
+        writer.add_scalar("OCCAccuracy", occ, epoch)
+        writer.add_scalar("AVGJaccard", jac, epoch)
+        
+        #print(f"Average threshold accuracy: {thr_acc/n}")
+        #print(f"Occlusion accuracy: {occ/n}")
+        #print(f"Average Jaccard: {jac/n}")
 
 
 def main():
     lr = 1e-3
     batch_size = 1
-    epochs = 10
+    epochs = 20
+
+    now = datetime.now()
+    now_str = now.strftime(("%d.%m.%Y_%H:%M:%S"))
+    writer_dir = os.path.join("/scratch_net/biwidl304/amarugg/gluTracker/runs", now_str)
+    os.mkdir(writer_dir)
+    writer = SummaryWriter(log_dir=writer_dir)
 
     train_dataset = KubricDataset("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/kubric/kubric_movi_f_120_frames_dense/movi_f")
     val_dataset = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
@@ -108,9 +127,12 @@ def main():
 
     for epoch in range(epochs):
         avg_loss = train(model, train_loader, loss_fnct, optimiser, device)
-        print(f"Epoch {epoch} | Train Loss: {avg_loss:.4f}")
-        validate(model, val_loader, device)
+        #print(f"Epoch {epoch} | Train Loss: {avg_loss:.4f}")
+        writer.add_scalar("Loss/train", avg_loss, epoch)
+        validate(model, val_loader, device, writer, epoch)
+
     model.save()
+    writer.close()
 
 
 if __name__ == "__main__":
