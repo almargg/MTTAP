@@ -51,7 +51,7 @@ def main():
                 vis_pred,
                 qrs
             )
-            display_tap_vid(pred)
+            display_tap_vid(pred, save=True)
 
 
 if __name__ == "__main__":

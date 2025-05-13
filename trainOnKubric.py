@@ -17,7 +17,7 @@ def train(model: GluTracker, loader, loss_function, optimiser, device):
         loss_sum += model.train_video(qrs, frames, trajs, vsbls, loss_function)
         iter += 1
         optimiser.step()
-        if i == 1000:
+        if i == 4000:
             break
     return loss_sum / iter
 
@@ -85,9 +85,11 @@ def validate(model, loader, device, writer: SummaryWriter, epoch):
                     video = create_tap_vid(pred)
                     writer.add_video(f"TapVidDavis_{i}", video[None, :, :, :, :], epoch, fps=10)
 
-        writer.add_scalar("AVGThreshold", thr_acc, epoch)
-        writer.add_scalar("OCCAccuracy", occ, epoch)
-        writer.add_scalar("AVGJaccard", jac, epoch)
+        writer.add_scalar("AVGThreshold", thr_acc/n, epoch)
+        writer.add_scalar("OCCAccuracy", occ/n, epoch)
+        writer.add_scalar("AVGJaccard", jac/n, epoch)
+
+        return (thr_acc + occ + jac) / n
         
         #print(f"Average threshold accuracy: {thr_acc/n}")
         #print(f"Occlusion accuracy: {occ/n}")
@@ -95,7 +97,7 @@ def validate(model, loader, device, writer: SummaryWriter, epoch):
 
 
 def main():
-    lr = 1e-3
+    lr = 1e-4
     batch_size = 1
     epochs = 20
 
@@ -124,14 +126,16 @@ def main():
     model.use_trained_fnet()
     #model.load()
     #optimiser = torch.optim.SGD(model.parameters(), lr=lr)
-
+    best_perf = 0
     for epoch in range(epochs):
         avg_loss = train(model, train_loader, loss_fnct, optimiser, device)
         #print(f"Epoch {epoch} | Train Loss: {avg_loss:.4f}")
         writer.add_scalar("Loss/train", avg_loss, epoch)
-        validate(model, val_loader, device, writer, epoch)
+        perf = validate(model, val_loader, device, writer, epoch)
+        if perf > best_perf:
+            model.save()
+            best_perf = perf
 
-    model.save()
     writer.close()
 
 

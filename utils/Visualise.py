@@ -3,6 +3,8 @@ import numpy as np
 import random
 import cv2
 import torch
+import imageio
+import os
 from dataset.Dataloader import TapData
 
 
@@ -48,14 +50,23 @@ def create_tap_vid(sample: TapData, idx=0):
     out = torch.from_numpy(out)
     return out
         
+def save_gif(images):
+    save_dir = "/scratch_net/biwidl304/amarugg/gluTracker/media"
+    imageio.mimsave(os.path.join(save_dir, "movie.gif"), images, fps=20)
+    print("GIF saved")
 
-
-def display_tap_vid(sample: TapData, idx=0):
+def display_tap_vid(sample: TapData, idx=0, save=False):
+    
+    images = []
     video = create_tap_vid(sample, idx=idx)
     for s in range(video.shape[0]):
         frame = video[s]
         frame = np.moveaxis(frame.numpy(), 0, -1)
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        images.append((frame * 255).astype("uint8").copy())
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         cv2.imshow("Video", frame)
         cv2.waitKey(100)
     cv2.destroyAllWindows()
+    if save:
+        save_gif(images)
+

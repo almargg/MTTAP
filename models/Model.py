@@ -7,7 +7,7 @@ import numpy as np
 
 
 class GluTracker(nn.Module):
-    def __init__(self, n_corr_lvl=3, r_win=1, stride=4, latent_dim=128, save_dir = "/scratch_net/biwidl304/amarugg/gluTracker/weights"):
+    def __init__(self, n_corr_lvl=2, r_win=1, stride=4, latent_dim=128, save_dir = "/scratch_net/biwidl304/amarugg/gluTracker/weights"):
         super().__init__()
         self.fnet = BasicEncoder(stride=stride)
         print(f"Feature Net consisting of {sum(p.numel() for p in self.fnet.parameters())} Parameters")
@@ -39,7 +39,7 @@ class GluTracker(nn.Module):
     returns:
         features: (B, N, 2*r+1, 2*r+1)
     """
-    def display_heatmap(self, position, frames):
+    def get_heatmap(self, position, frames):
         N, _, _, _ = frames.shape
         r = 1
         assert N == 2
@@ -71,9 +71,11 @@ class GluTracker(nn.Module):
 
         frames[0, y*4-1:y*4+2, x*4-1:x*4+2, :] = np.array([0,0,255])
         frames[1, y_best-1:y_best+2, x_best-1:x_best+2, :] = np.array([255, 0, 0])
+        frames[0] = cv2.cvtColor(frames[0], cv2.COLOR_RGB2BGR)
+        frames[1] = cv2.cvtColor(frames[1], cv2.COLOR_RGB2BGR)
         imgs = np.concatenate((frames[0], frames[1], heatmap), axis=1)
-        cv2.imshow("Heatmap", imgs)
-        cv2.waitKey(-1)
+        return imgs
+
 
     def sample_features(self, fmap, points):
         B, C, H, W = fmap.shape
