@@ -3,26 +3,14 @@ from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 import os
 from dataset.Dataloader import KubricDataset, TapvidDavisFirst, TapData
-from models.Model import GluTracker
+from models.Model import GluTracker, query
 from models.utils.Loss import tap_loss, coTrack_loss, pixel_pred_loss
 from utils.Metrics import compute_metrics, compute_avg_distance
 from utils.Visualise import create_tap_vid
 
-def train(model: GluTracker, loader, loss_function, optimiser, device):
-    loss_sum = 0
-    iter = 0
-    for i, (frames, trajs, vsbls, qrs) in enumerate(loader):
-        frames, trajs, vsbls, qrs = frames.to(device), trajs.to(device), vsbls.to(device), qrs.to(device)
-        optimiser.zero_grad()
-        loss_sum += model.train_video(qrs, frames, trajs, vsbls, loss_function)
-        iter += 1
-        optimiser.step()
-        if i == 4000:
-            break
-    return loss_sum / iter
 
 
-def validate(model, loader, device, writer: SummaryWriter, epoch):
+def validate(model, loader, writer: SummaryWriter, epoch, device):
     vis_all_n_epoch = 5
     model.eval()
 
@@ -36,22 +24,26 @@ def validate(model, loader, device, writer: SummaryWriter, epoch):
             vis_pred = torch.zeros_like(vsbls)
 
             for b in range(frames.shape[0]): #Run each batch seperately as dimensions of tracked points are not guaranteed to match
+                queries = query(
+                    coordinates=torch.empty(0).to(device),
+                    anchors=torch.empty(0).to(device)
+                )
                 for j in range(frames.shape[1] - 1):
 
                     new_ptns = qrs[b,:,0] == j #K
-                    trajs_pred[b,j,:,:][new_ptns] = trajs[b,j,:,:][new_ptns] # Add new tracks
+                    n_queries = trajs[b,j,:,:][new_ptns]
+                    trajs_pred[b,j,:,:][new_ptns] =  n_queries# Add new tracks
 
                     qrs_msk = qrs[b,:,0] <= j #K
-                    queries = torch.unsqueeze(trajs_pred[b, j, :, :][qrs_msk], 0)
 
                     frames_ = torch.stack([frames[b,j,:,:,:], frames[b,j+1,:,:,:]], dim=0)
-                    frames_ = torch.unsqueeze(frames_, 0)
+                    #frames_ = torch.unsqueeze(frames_, 0)
 
-                    pred_pose, pred_vis = model(queries, frames_)
+                    queries, pred_vis = model(queries, frames_, n_queries)
                     
-                    pred_pose, pred_vis = pred_pose.detach(), pred_vis.detach()
-                    trajs_pred[b,j+1,:,:][qrs_msk] = pred_pose[0,:,:]
-                    vis_pred[b,j+1,:][qrs_msk] = pred_vis[0,:]
+                    pred_pose = queries.coordinates
+                    trajs_pred[b,j+1,:,:][qrs_msk] = pred_pose[:,:]
+                    vis_pred[b,j+1,:][qrs_msk] = pred_vis[:]
 
             trajs_pred, vis_pred = trajs_pred.cpu(), vis_pred.cpu()
             frames, trajs, vsbls, qrs = frames.cpu(), trajs.cpu(), vsbls.cpu(), qrs.cpu()
@@ -90,16 +82,44 @@ def validate(model, loader, device, writer: SummaryWriter, epoch):
         writer.add_scalar("AVGJaccard", jac/n, epoch)
 
         return (thr_acc + occ + jac) / n
-        
-        #print(f"Average threshold accuracy: {thr_acc/n}")
-        #print(f"Occlusion accuracy: {occ/n}")
-        #print(f"Average Jaccard: {jac/n}")
 
+
+
+def train(model: GluTracker, train_loader, val_loader, loss_fnct, optimiser, writer, n_steps, device):
+    steps_per_epoch = 1000
+    loss_sum = 0
+    iter = 0
+    best_perf = 0
+    for i, (frames, trajs, vsbls, qrs) in enumerate(train_loader):
+        
+        #Training
+        frames, trajs, vsbls, qrs = frames.to(device), trajs.to(device), vsbls.to(device), qrs.to(device)
+        optimiser.zero_grad()
+        loss_sum += model.train_video(qrs, frames, trajs, vsbls, loss_fnct)
+        iter += 1
+        optimiser.step()
+
+        #Validation
+        if (i % steps_per_epoch) == (steps_per_epoch-1):
+            epoch = i // steps_per_epoch
+            avg_loss = loss_sum / iter
+            writer.add_scalar("Loss/train", avg_loss, epoch)
+            avg_loss = 0
+            iter = 0
+
+            perf = validate(model, val_loader, writer, epoch, device)
+            if perf > best_perf:
+                model.save()
+                best_perf = perf
+
+        if i == n_steps:
+            return
+    
 
 def main():
     lr = 1e-4
     batch_size = 1
-    epochs = 20
+    n_steps = 1_001
 
     now = datetime.now()
     now_str = now.strftime(("%d.%m.%Y_%H:%M:%S"))
@@ -126,15 +146,8 @@ def main():
     model.use_trained_fnet()
     #model.load()
     #optimiser = torch.optim.SGD(model.parameters(), lr=lr)
-    best_perf = 0
-    for epoch in range(epochs):
-        avg_loss = train(model, train_loader, loss_fnct, optimiser, device)
-        #print(f"Epoch {epoch} | Train Loss: {avg_loss:.4f}")
-        writer.add_scalar("Loss/train", avg_loss, epoch)
-        perf = validate(model, val_loader, device, writer, epoch)
-        if perf > best_perf:
-            model.save()
-            best_perf = perf
+    validate(model, val_loader, writer, 0, device)
+    train(model, train_loader, val_loader, loss_fnct, optimiser, writer, n_steps, device)
 
     writer.close()
 

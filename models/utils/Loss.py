@@ -34,12 +34,15 @@ def coTrack_loss(pos_gt: torch.Tensor, vis_gt: torch.Tensor, pos_pred: torch.Ten
     return loss_track + loss_vis
 
 def pixel_pred_loss(pred, vis, d_traj, gt_vis, H, W):
-    B, N, _ = d_traj.shape
+    N, _ = d_traj.shape
     l = pred.shape[1]
     r = (l-1)/2
     device = d_traj.device
-    gt_center_y = d_traj[:, :, 1] * (H-1)
-    gt_center_x = d_traj[:, :, 0] * (W-1)
+    gt_center_y = d_traj[:, 1] * (H-1)
+    gt_center_x = d_traj[:, 0] * (W-1)
+    
+    in_search = torch.logical_and(torch.logical_and(gt_center_y < r, gt_center_y > -r), torch.logical_and(gt_center_x < r, gt_center_x > -r))
+
     gt_pred = torch.zeros(N, l, l).to(device)#H, W
     for h in range(l):
         for w in range(l):
@@ -53,7 +56,7 @@ def pixel_pred_loss(pred, vis, d_traj, gt_vis, H, W):
     #Normalise to 1
     #gt_pred = torch.reshape(gt_pred, (N, l*l))
 
-    loss_track = torch.mean(torch.abs(gt_pred - pred))
+    loss_track = torch.mean(torch.sum(torch.abs(gt_pred - pred),dim=(1,2)) * in_search)
 
     loss = nn.BCELoss()
     loss_vis = loss(vis, gt_vis)

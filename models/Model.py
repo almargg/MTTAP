@@ -4,7 +4,12 @@ import torch.nn.functional as F
 from models.utils.Modules import BasicEncoder, PredictionMLP
 import cv2
 import numpy as np
+from dataclasses import dataclass
 
+@dataclass
+class query():
+    coordinates: torch.Tensor
+    anchors: torch.Tensor
 
 class GluTracker(nn.Module):
     def __init__(self, n_corr_lvl=2, r_win=1, stride=4, latent_dim=128, save_dir = "/scratch_net/biwidl304/amarugg/gluTracker/weights"):
@@ -78,8 +83,8 @@ class GluTracker(nn.Module):
 
 
     def sample_features(self, fmap, points):
-        B, C, H, W = fmap.shape
-        _, N, _ = points.shape
+        C, H, W = fmap.shape
+        N, _ = points.shape
 
         device = points.device
 
@@ -93,33 +98,40 @@ class GluTracker(nn.Module):
 
         points = points * 2 - 1
 
-        grid = points.unsqueeze(2) + offset_grid.view(1,1, self.win_size*self.win_size, 2) # B, N, (2*r+1)^2, 2
-        grid = grid.unsqueeze(1) # B, N, (2*r+1)^2, 2
-        grid = grid.view(B, N*self.win_size*self.win_size, 1, 2)
+        grid = points[:,None,:] + offset_grid[None,:,:]
+        grid = grid.view(N, self.win_size, self.win_size, 2) 
 
-        fmap = fmap.view(B, C, H, W) # B, C, H, W
+        fmap = fmap[None,:,:,:].expand((N, -1, -1, -1))
 
-        sampled = F.grid_sample(fmap, grid, align_corners=True, mode="bilinear", padding_mode="zeros") # B*S, C, N*(2*r+1)^2,1
-        sampled = sampled.view(B, C, N, self.win_size, self.win_size)
+        sampled = F.grid_sample(fmap, grid, align_corners=True, mode="bilinear", padding_mode="zeros") 
         
         return sampled
     
+    """
+    Return Features at each queriy location for all correlation levels
+    [n_corr, N, w^2]
+    """
+    def get_anchor_features(self, fmaps_pyramid, n_queries, s):
+        device = fmaps_pyramid[0].device
+        anchor_features = torch.zeros(self.n_corr_lvl, n_queries.shape[0], self.latent_dim, self.win_size, self.win_size, device=device)
+        for i in range(self.n_corr_lvl):
+            fmap = fmaps_pyramid[i][s,:,:,:]
+            points = self.sample_features(fmap, n_queries)
+            anchor_features[i,:,:,:,:] = points
+        return anchor_features
 
     def resize_feature_map(self, fmap, target_size=(108,135)):
-        B, S, C, _, _ = fmap.shape
-        fmap = fmap.view(B * S, C, 96, 128)
         resized = F.interpolate(fmap, size=target_size, mode="bilinear", align_corners=False)
-        return resized.view(B, S, C, *target_size)
+        return resized
 
     def extract_fmaps_pyramids(self, frames):
-        B, S, C, H, W = frames.shape
+        S, C, H, W = frames.shape
         dtype = frames.dtype
 
         #Normalise video
-        frames = 2 * (frames / 255) - 1 # B, S, 3, 384, 512
+        frames = 2 * (frames / 255) - 1 # S, 3, 384, 512
 
-        fmap = self.fnet(frames.reshape(B*S, C, H, W)) # N, 128, 96, 128
-        fmap = fmap.reshape(B, S, self.latent_dim, H // self.stride, W // self.stride) #B, S, 128, 96, 128
+        fmap = self.fnet(frames) # N, 128, 96, 128
         fmap = fmap.to(dtype)
 
         #Rescale fmap to have h/w that is multiple of win size
@@ -129,40 +141,31 @@ class GluTracker(nn.Module):
         fmaps_pyramid = []
         fmaps_pyramid.append(fmap)
         for i in range(self.n_corr_lvl - 1):
-            fmap_ = fmap.reshape(B*S, self.latent_dim, fmap.shape[-2], fmap.shape[-1])
-            fmap_ = F.avg_pool2d(fmap_, kernel_size=self.win_size, stride=self.win_size)
-            fmap = fmap_.reshape(B, S, self.latent_dim, fmap.shape[-2] // self.win_size, fmap.shape[-1] // self.win_size)
+            fmap = F.avg_pool2d(fmap, kernel_size=self.win_size, stride=self.win_size)
             fmaps_pyramid.append(fmap)
 
         return fmaps_pyramid
     
-    def create_corr_vol(self, fmaps, queries, pred_pos):
-        features = self.sample_features(fmaps[:,0,:,:,:], queries) # B, C, N, (2*r+1)^2
-        feature_matches = self.sample_features(fmaps[:,1,:,:,:], pred_pos) # B, C, N, (2*r+1)^2
-
+    def create_corr_vol(self, features_o, features_n):
         #From LocoTrack
         """
         rename to query features and tracking features
         corr_4D
         """
-        B, C, N, H, W = features.shape
-        _, _, _, H_, W_ = feature_matches.shape
+        N, C, H, W = features_o.shape
 
-        # Reshape to (B, C, N, H*W)
-        features_flat = features.view(B, C, N, H * W)
-        # Reshape to (B, C, N, H_*W_)
-        feature_matches_flat = feature_matches.view(B, C, N, H_ * W_)
+        features_old_flat = features_o.view(N, C, H * W)
+        feature_new_flat = features_n.view(N, C, H * W)
 
         # Normalize along the channel dimension
-        features_norm = F.normalize(features_flat, p=2, dim=1)  # (B, C, N, H*W)
-        feature_matches_norm = F.normalize(feature_matches_flat, p=2, dim=1)  # (B, C, N, H_*W_)
+        features_old_norm = F.normalize(features_old_flat, p=2, dim=1) 
+        feature_new_norm = F.normalize(feature_new_flat, p=2, dim=1)  
 
-        # Compute cosine similarity: (B, N, H*W, H_*W_)
-        corr = torch.einsum('bcnh, bcnk -> bnhk', features_norm, feature_matches_norm)
+        # Compute cosine similarity: (N, H*W, H_*W_)
+        corr_vol = torch.einsum('nch, nck -> nhk', features_old_norm, feature_new_norm)
 
-        # Reshape to (B, N, H, W, H_, W_)
-        corr_vol = corr.view(B, N, H, W, H_, W_)
-        corr_vol = corr_vol.reshape(B*N, self.win_size**4)
+        corr_vol = corr_vol.view(N, H, W, H, W)
+        corr_vol = corr_vol.reshape(N, self.win_size**4)
 
         return corr_vol
     
@@ -184,69 +187,97 @@ class GluTracker(nn.Module):
 
     
     def train_video(self, qrs, frames, trajs, visibility, loss_f):
+        device = frames.device
         self.train()
-        B, S, C, H, W = frames.shape
-        fmaps_pyramid = self.extract_fmaps_pyramids(frames)
         loss = 0
         iter = 0
         for b in range(frames.shape[0]): #Run each batch seperately as dimensions of tracked points are not guaranteed to match
+            fmaps_pyramid = self.extract_fmaps_pyramids(frames[b,:,:,:,:])
+            B, S, N, _ = trajs.shape
+            S, C, H, W = fmaps_pyramid[0].shape
+            anchors = torch.zeros(self.n_corr_lvl, N, C, self.win_size, self.win_size, device=device)
+            trajs_pred = torch.zeros(S, N, 2, device=device)
             for j in range(frames.shape[1] - 1):
-                trajs_ = trajs[b, j, :, :] # N, 2
-                qrs_msk = qrs[b,:,0] <= j #N
-                queries = trajs_[qrs_msk][None, :, :] #Ground Truth position of all trackable trajectories
+
+                qrs_msk = qrs[b,:,0] <= j # N
+                new_qrs = qrs[b,:,0] == j
+                trajs_pred[j,:,:][new_qrs] = trajs[b,j,:,:][new_qrs]
+                queries = trajs_pred[j,:,:][qrs_msk]
+
+                anchors[:,new_qrs] = self.get_anchor_features(fmaps_pyramid, trajs_pred[j,:,:][new_qrs], j)
 
                 gt_traj = trajs[b, j+1, :, :][qrs_msk]
                 d_traj = gt_traj - queries
                 gt_vis = visibility[b, j+1, :][qrs_msk]
                 
-                pred_pos = queries # B, N, 2
-                N = queries.shape[1]
+                pred_pos = queries 
+                N = queries.shape[0]
                 for i in range(self.n_corr_lvl):
-                    fmaps = fmaps_pyramid[self.n_corr_lvl - i - 1][:, j:j+2]
-                    corr_vol = self.create_corr_vol(fmaps, queries, pred_pos)
+                    fmaps = fmaps_pyramid[self.n_corr_lvl - i - 1][j:j+2]
+                    _, C,  H, W = fmaps.shape
 
-                    pred, vis = self.predictor(corr_vol)
-                    pred = pred.reshape(1, N, self.win_size, self.win_size)
-                    vis = vis.reshape(1, N)
-                    B, S, C,  H, W = fmaps.shape
-                    loss += loss_f(pred[0], vis[0], d_traj, gt_vis, H, W)
+                    features_last = self.sample_features(fmaps[0,:,:,:], queries)
+                    features_cur = self.sample_features(fmaps[1,:,:,:], pred_pos)
+                    
+                    corr_st = self.create_corr_vol(features_last, features_cur)
+                    corr_lt = self.create_corr_vol(anchors[i, qrs_msk], features_cur)
+
+                    corr_vols = torch.cat((corr_st, corr_lt), 1)
+
+                    pred, vis = self.predictor(corr_vols)
+                    pred = pred.reshape(N, self.win_size, self.win_size)
+                    
+                    loss += loss_f(pred, vis, d_traj, gt_vis, H, W)
                     iter += 1
 
                     d_x, d_y = self.calculate_position_update(pred, H, W)
 
-                    pred_pos[:,:,0] += d_x
-                    pred_pos[:,:,1] += d_y
+                    pred_pos[:,0] += d_x
+                    pred_pos[:,1] += d_y
         loss.backward()
 
         return loss.item() / iter
-
-
-
-            
-    def forward(self, queries, frames):
-        B, S, C, H, W = frames.shape
+    
+    def forward(self, queries: query, frames, n_queries=torch.tensor([])):
+        S, C, H, W = frames.shape
         device = frames.device
-        B, N, _ = queries.shape
         fmaps_pyramid = self.extract_fmaps_pyramids(frames)
 
-        pred_pos = queries # B, N, 2
-        pred_vis = torch.zeros(B, N, device=device) # B, N
+        #Create New Queries
+        if n_queries.shape[0] > 0:
+            n_anchors = self.get_anchor_features(fmaps_pyramid, n_queries, 0)
+            queries.anchors = torch.cat((queries.anchors, n_anchors), 1)
+            queries.coordinates = torch.cat((queries.coordinates, n_queries), 0)
+
+        N, _ = queries.coordinates.shape
+
+        pred_pos = queries.coordinates
+        pred_vis = torch.zeros(N, device=device) 
         #Coarse to fine search
         for i in range(self.n_corr_lvl):
 
-            corr_vol = self.create_corr_vol(fmaps_pyramid[self.n_corr_lvl - i - 1], queries, pred_pos)
+            features_last = self.sample_features(fmaps_pyramid[self.n_corr_lvl - i - 1][0,:,:,:], queries.coordinates)
+            features_cur = self.sample_features(fmaps_pyramid[self.n_corr_lvl - i - 1][1,:,:,:], pred_pos)
+
+            corr_st = self.create_corr_vol(features_last, features_cur)
+            corr_lt = self.create_corr_vol(queries.anchors[i,:,:,:], features_cur)
+
+            corr_vol = torch.cat((corr_st, corr_lt), 1)
+
 
             pred, vis = self.predictor(corr_vol)
-            pred = pred.reshape(B, N, self.win_size, self.win_size)
-            vis = vis.reshape(B,N)
+            pred = pred.reshape(N, self.win_size, self.win_size)
+            vis = vis.reshape(N)
 
-            d_x, d_y = self.calculate_position_update(pred, fmaps_pyramid[self.n_corr_lvl - i - 1].shape[3], fmaps_pyramid[self.n_corr_lvl - i - 1].shape[4])
+            d_x, d_y = self.calculate_position_update(pred, fmaps_pyramid[self.n_corr_lvl - i - 1].shape[2], fmaps_pyramid[self.n_corr_lvl - i - 1].shape[3])
 
-            pred_pos[:,:,0] += d_x
-            pred_pos[:,:,1] += d_y
+            pred_pos[:,0] += d_x
+            pred_pos[:,1] += d_y
 
-            pred_vis[:,:] += vis
+            pred_vis[:] += vis
         
         pred_vis /= self.n_corr_lvl
 
-        return pred_pos, pred_vis
+        queries.coordinates = pred_pos.detach()
+
+        return queries, pred_vis.detach()

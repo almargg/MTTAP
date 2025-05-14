@@ -6,23 +6,22 @@ import torch.nn.functional as F
 class PredictionMLP(nn.Module):
     def __init__(self, n_windows):
         super().__init__()
-        self.n_out = n_windows
-        in_dim = n_windows * n_windows
+        in_dim = n_windows * n_windows * 2
         out_dim = n_windows + 1
 
         self.layer_1 = nn.Sequential(
-            nn.Linear(in_dim, n_windows*n_windows),
+            nn.Linear(in_dim, in_dim),
             nn.ReLU()
         )
         self.layer_2 = nn.Sequential(
-            nn.Linear(n_windows*n_windows, n_windows*n_windows),
+            nn.Linear(in_dim, n_windows*n_windows),
             nn.ReLU()
         )
         self.layer_3 = nn.Sequential(
-            nn.Linear(n_windows*n_windows, n_windows),
+            nn.Linear(n_windows*n_windows, out_dim),
             nn.ReLU()
         )
-        self.layer_4 = nn.Linear(n_windows, out_dim)
+        self.layer_4 = nn.Linear(out_dim, out_dim)
         
         self.softmax = nn.Softmax(dim=1)
         self.sig = nn.Sigmoid()
