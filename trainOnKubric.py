@@ -119,7 +119,7 @@ def train(model: GluTracker, train_loader, val_loader, loss_fnct, optimiser, wri
 def main():
     lr = 1e-4
     batch_size = 1
-    n_steps = 1_001
+    n_steps = 20_001
 
     now = datetime.now()
     now_str = now.strftime(("%d.%m.%Y_%H:%M:%S"))
@@ -146,7 +146,7 @@ def main():
     model.use_trained_fnet()
     #model.load()
     #optimiser = torch.optim.SGD(model.parameters(), lr=lr)
-    validate(model, val_loader, writer, 0, device)
+    validate(model, val_loader, writer, -1, device)
     train(model, train_loader, val_loader, loss_fnct, optimiser, writer, n_steps, device)
 
     writer.close()

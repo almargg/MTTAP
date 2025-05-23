@@ -3,9 +3,7 @@ import os
 import imageio
 import numpy as np
 import pickle
-import io
 import matplotlib.pyplot as plt
-from PIL import Image
 from typing import Mapping
 from dataclasses import dataclass
 import random
@@ -157,6 +155,40 @@ class TapvidDavisFirst(torch.utils.data.DataLoader):
         rgbs = resize_video(rgbs)
         return rgbs.float(), trajs.float(), visibles.float(), query_points.float()
     
+
+
+class TapvidRgbStacking(torch.utils.data.DataLoader):
+    def __init__(self, data_root):
+        with open(data_root, "rb") as f:
+            self.points_dataset = pickle.load(f)
+            self.video_names = [i for i in range(len(self.points_dataset))]
+        print("found %d unique videos in %s" % (len(self.points_dataset), data_root))
+        
+    def __len__(self):
+        return len(self.points_dataset)
+    
+    def __getitem__(self, idx):
+        video_name = self.video_names[idx]
+        video = self.points_dataset[video_name]
+        frames = video["video"]
+
+        target_points = self.points_dataset[video_name]["points"]
+        target_occ = self.points_dataset[video_name]["occluded"]
+        converted = sample_queries_first(target_occ, target_points, frames)
+        trajs = (
+            torch.from_numpy(converted["target_points"])[0].permute(1, 0, 2)
+        )  # T, N, D
+        #Rescaling
+        query_points = torch.from_numpy(converted["query_points"])[0] # T, N
+        rgbs = torch.from_numpy(frames).permute(0, 3, 1, 2)
+        visibles = torch.logical_not(torch.from_numpy(converted["occluded"]))[
+            0
+        ].permute(
+            1, 0
+        )  # T, N
+        rgbs = resize_video(rgbs)
+        return rgbs.float(), trajs.float(), visibles.float(), query_points.float()
+    
 if __name__=="__main__":
     def safe_video(frames, traj, vis):
         output_dir = "/scratch_net/biwidl304/amarugg/cotracker/saved_videos/overlays"
@@ -177,7 +209,8 @@ if __name__=="__main__":
         for b in range(B):
             for s in range(S):
                 frame = video[b, s].permute(1, 2, 0).numpy()  # C, H, W -> H, W, C
-                frame = np.clip(frame, 0, 255)
+                frame = frame / 255
+                frame = np.clip(frame, 0, 1)
 
                 plt.figure(figsize=(H / 100, W / 100), dpi=100)
                 plt.imshow(frame)
@@ -203,11 +236,13 @@ if __name__=="__main__":
     #Test dataset
     train_dataset = KubricDataset("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/kubric/kubric_movi_f_120_frames_dense/movi_f")
     val_dataset = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
+    rgb_stack = TapvidRgbStacking("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_rgb_stacking/tapvid_rgb_stacking.pkl")
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=False)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=1, shuffle=False)
+    rgb_loader = torch.utils.data.DataLoader(rgb_stack, batch_size=1, shuffle=False)
 
-    for i, (frames, trajs, vsbls, qrs) in enumerate(train_loader):
+    for i, (frames, trajs, vsbls, qrs) in enumerate(rgb_loader):
 
         print("Frames: Shape ", frames.shape, " dtype: ", frames.dtype, " and ranging from ", torch.min(frames), " to ", torch.max(frames))
         print("Trajectories: Shape ", trajs.shape, " dtype: ", trajs.dtype, " and ranging from ", torch.min(trajs), " to ", torch.max(trajs))
@@ -221,7 +256,7 @@ if __name__=="__main__":
             if not(qry_coord[0] == point_coord[0] and qry_coord[1] == point_coord[1]):
                 print("ERROR with query point ", qry_coord, " and track ", point_coord)
 
-        if i == 5:
+        if i == 0:
             safe_video(frames, trajs, vsbls)
             
             break
