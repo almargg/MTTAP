@@ -31,20 +31,22 @@ def compute_metrics(gt: TapData, prediction: TapData):
     distance = gt_trajectory - pred_trajectory
     norm_dist = np.linalg.norm(distance, axis=3) #B, S, N
 
-    within_thresholds = norm_dist < thresholds[None, :, None, None] #B, T, S, N
+    within_thresholds = (norm_dist < thresholds[:, None, None])
 
     pred_visible = prediction.visibility.numpy() > 0.5
     gt_visible = gt.visibility.numpy() > 0.5
     correct_occlusion = gt_visible == pred_visible #B, S, N
 
-    true_positiv = np.sum(eval_points & within_thresholds & gt_visible, axis=(1,2,3))
-    false_positiv = np.sum(eval_points & (pred_visible & (~gt_visible | ~within_thresholds)), axis=(1,2,3))
-    false_negativ = np.sum(eval_points & (gt_visible & (~pred_visible | ~within_thresholds)), axis=(1,2,3))
+    true_positiv = np.sum(eval_points[None] & within_thresholds & gt_visible[None], axis=(0,2,3))
+    false_positiv = np.sum(eval_points[None] & (pred_visible[None] & (~gt_visible[None] | ~within_thresholds)), axis=(0,2,3))
+    false_negativ = np.sum(eval_points[None] & (gt_visible[None] & (~pred_visible[None] | ~within_thresholds)), axis=(0,2,3))
+
+    assert true_positiv.shape[0] == 5
 
     jac = true_positiv / (true_positiv + false_positiv + false_negativ)
     avg_jac = np.average(jac)
 
-    occ_acc = np.sum(correct_occlusion & eval_points, axis=(1,2)) / np.sum (eval_points, axis=(1,2))
+    occ_acc = np.sum(correct_occlusion & eval_points, axis=(1)) / np.sum (eval_points, axis=(1))
     avg_occ_acc = np.average(occ_acc)
 
     n_valid = np.sum(gt_visible & eval_points, axis=(1,2))

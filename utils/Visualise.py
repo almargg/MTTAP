@@ -6,7 +6,7 @@ import torch
 import imageio
 import os
 from dataset.Dataloader import TapData
-
+import torch
 
 
 def create_tap_vid(sample: TapData, idx=0):
@@ -70,3 +70,23 @@ def display_tap_vid(sample: TapData, idx=0, save=False):
     if save:
         save_gif(images)
 
+def paint_points(frame, coordinates):
+    circle_radius = 10
+    circle_color = (0, 255, 0)
+    circle_thickness = 2
+    
+    for i in range(coordinates.shape[0]):
+        x, y = int(coordinates[i,0]), int(coordinates[i,1])
+        cv2.circle(frame, (x,y), circle_radius, circle_color, circle_thickness)
+
+    return frame
+
+def display_torch_frame(frame, coordinates=None):
+    frame = frame.numpy()
+    frame = np.moveaxis(frame, 0, -1)
+    frame = (frame).astype("uint8")
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    if coordinates != None:
+        frame = paint_points(frame, coordinates)
+    cv2.imshow("Frame", frame)
+    cv2.waitKey(-1)

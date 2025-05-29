@@ -1,9 +1,11 @@
 import time
 import torch
 import numpy as np
+import sys
 from dataset.Dataloader import TapvidDavisFirst, TapvidRgbStacking, TapData
 from utils.Visualise import display_tap_vid
 from utils.Metrics import compute_metrics
+from cotracker.cotracker.predictor import CoTrackerOnlinePredictor
 
 davis_dat = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
 davis = torch.utils.data.DataLoader(davis_dat, batch_size=1, shuffle=False)
@@ -20,8 +22,17 @@ else:
     device = "cpu"
     print("WARNING NO GPU AVAILABLE")
 
-cotracker = torch.hub.load("facebookresearch/co-tracker", "cotracker3_online").to(device)
-step_size = cotracker.step
+
+cotracker = CoTrackerOnlinePredictor(
+                checkpoint="/scratch_net/biwidl304/amarugg/cotracker/ckpt/scaled_online.pth",
+                v2=False,
+                offline=False,
+                window_len=16,
+            ).to(device)
+
+cotracker.eval()
+
+stepsize = cotracker.step
 
 with torch.no_grad():
     for i, dataset in enumerate(datasets):
@@ -38,25 +49,21 @@ with torch.no_grad():
             )
             gts.append(gt)
 
-            qrs[:,:,1] *= frames.shape[3]
-            qrs[:,:,2] *= frames.shape[4]
-            qrs.to(device)
-            frames.to(device)
+            qrs[:,:,1] *= frames.shape[4]
+            qrs[:,:,2] *= frames.shape[3]
+            qrs = qrs.to(device)
+            frames = frames.to(device)
 
             cotracker(video_chunk=frames, is_first_step=True, grid_size=0, queries=qrs, add_support_grid=True)
             for ind in range(0, frames.shape[1] - cotracker.step, cotracker.step):
-                pred_tracks, pred_visibility = cotracker(
-                    video_chunk=frames[:, ind : ind + cotracker.step * 2].to(device),
-                    grid_size=0,
-                    queries=qrs.to(device),
-                    add_support_grid=True
-                )
+                pred_tracks, pred_visibility = cotracker(video_chunk=frames[:,ind : ind + cotracker.step * 2], grid_size=0, queries=qrs, add_support_grid=True)
+
             tracks = pred_tracks.cpu().numpy()
             pred_occ = pred_visibility[0].cpu()
 
             data = TapData(
             video=frames,
-            trajectory=torch.from_numpy(tracks)[None,:,:,:],
+            trajectory=torch.from_numpy(tracks),
             visibility=pred_occ[None,:,:],
             query=qrs
             )
@@ -66,8 +73,8 @@ with torch.no_grad():
         avg_jac = 0
         samples = len(gts)
         
-        for i in range(samples):
-            thr, occ, jac = compute_metrics(gts[i], predictions[i])
+        for j in range(samples):
+            thr, occ, jac = compute_metrics(gts[j], predictions[j])
             avg_thrh_acc += thr
             avg_occ_acc += occ
             avg_jac += jac

@@ -29,7 +29,7 @@ echo "Starting on:     $(date)"
 echo "SLURM_JOB_ID:    ${SLURM_JOB_ID}"
 
 #python script
-conda run -n coTracker --no-capture-output python /scratch_net/biwidl304/amarugg/gluTracker/coTracker.py
+conda run -n coTracker --no-capture-output python /scratch_net/biwidl304/amarugg/gluTracker/superGlu_bench.py
 # Send more noteworthy information to the output log
 echo "Finished at:     $(date)"
 
