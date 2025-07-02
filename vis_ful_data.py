@@ -18,6 +18,18 @@ data_root = "/home/amarugg/Downloads/0000"
 
 npy_path = os.path.join(data_root, "0000.npy")
 frames_path = os.path.join(data_root, "frames")
+depth_dir = os.path.join(data_root, "depths")
+
+
+depth_imgs = []
+for f in os.listdir(depth_dir):
+    depth_imgs.append(np.load(os.path.join(depth_dir, f), allow_pickle=True))
+
+m_depth = np.stack(depth_imgs)
+print(f"Depth images shape: {m_depth.shape}")
+print(f"Depth images dtype: {m_depth.dtype}")
+print(f"Depth images min: {np.min(m_depth)}, max: {np.max(m_depth)}")
+
 
 annot_dict = np.load(npy_path, allow_pickle=True).item()
 
@@ -38,6 +50,8 @@ camera_model = np.array([[-0.1, -0.1, -0.1, 1], [-0.1, 0.1, -0.1, 1], [0.1, 0.1,
 
 start_points = np.stack([camera_model[0, :], camera_model[1, :], camera_model[2, :], camera_model[3, :], camera_model[0, :], camera_model[1, :], camera_model[2, ], camera_model[3, :]])
 end_points = np.stack([camera_model[1, :], camera_model[2, :], camera_model[3, :], camera_model[0, :], camera_model[4, :], camera_model[4, :], camera_model[4, :], camera_model[4, :]])
+
+
 
 
 #TODO
