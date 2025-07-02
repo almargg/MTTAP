@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.utils.Modules import BasicEncoder, PredictionMLP
+from models.utils.Modules import BasicEncoder
 import cv2
 import numpy as np
 from dataclasses import dataclass
@@ -18,7 +18,7 @@ class GluTracker(nn.Module):
         print(f"Feature Net consisting of {sum(p.numel() for p in self.fnet.parameters())} Parameters")
         self.r_win = r_win
         self.win_size = 2 * r_win + 1
-        self.predictor = PredictionMLP(self.win_size*self.win_size)
+        #self.predictor = PredictionMLP(self.win_size*self.win_size)
         print(f"Predictor consiting of {sum(p.numel() for p in self.predictor.parameters())} Parameters")
         self.stride = stride
         self.n_corr_lvl = n_corr_lvl

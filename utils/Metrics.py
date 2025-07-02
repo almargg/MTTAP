@@ -46,7 +46,7 @@ def compute_metrics(gt: TapData, prediction: TapData):
     jac = true_positiv / (true_positiv + false_positiv + false_negativ)
     avg_jac = np.average(jac)
 
-    occ_acc = np.sum(correct_occlusion & eval_points, axis=(1)) / np.sum (eval_points, axis=(1))
+    occ_acc = np.sum(correct_occlusion & eval_points, axis=(1)) / np.sum(eval_points, axis=(1))
     avg_occ_acc = np.average(occ_acc)
 
     n_valid = np.sum(gt_visible & eval_points, axis=(1,2))

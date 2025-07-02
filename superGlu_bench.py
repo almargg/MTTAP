@@ -2,16 +2,20 @@ import time
 import torch
 import numpy as np
 import cv2
+import os
 from dataset.Dataloader import TapvidDavisFirst, TapvidRgbStacking, TapData
-from utils.Visualise import display_tap_vid, display_torch_frame
+from utils.Visualise import display_tap_vid, display_torch_frame, save_tap_vid
 from utils.Metrics import compute_metrics
 from SuperGluePretrainedNetwork.models.matching import Matching
 
 def find_closest_point(point, keypoints):
+    offset = point - keypoints
     dist = torch.linalg.vector_norm(keypoints - point, ord=2, dim=1)
     idx = torch.argmin(dist)
     d = dist[idx]
-    return idx, d
+    o = offset[idx]
+    o = (o[0], o[1])
+    return idx, d, o
 
 def preprocess_frame(frame: torch.Tensor):
     frame_np = frame.numpy()
@@ -29,7 +33,7 @@ def create_video_tracking(frames, qrs, matching: Matching, device):
     N = qrs.shape[0]
 
     visible = torch.ones(S, N)
-    trajs = torch.zeros(S, N, 2)
+    trajs = torch.zeros(S, N, 2) - 1
     new_qrs = qrs[:,0] == 0
 
     #SETUP
@@ -37,27 +41,33 @@ def create_video_tracking(frames, qrs, matching: Matching, device):
     last_data = matching.superpoint({"image": first_frame})
     #Find points closest to queries
 
+    #Track all queries to first frame
+
+
+
     trajs[0, :, :] = qrs[:,1:]
 
     max_dist = 0
     avg_dist = 0
     idxs = []
+    offset = []
     for j in range(qrs.shape[0]):
-        idx, dist = find_closest_point(qrs[j,1:].to(device), last_data["keypoints"][0])
+        idx, dist, off = find_closest_point(qrs[j,1:].to(device), last_data["keypoints"][0])
         idxs.append(idx)
+        offset.append(off)
         if dist>max_dist:
             max_dist = dist
         avg_dist += dist / qrs.shape[0]
 
-    print(f"Largest distance to trackable point: {max_dist}")
-    print(f"Average distance to trackable point: {avg_dist}")
-
+    #print(f"Largest distance to trackable point: {max_dist}")
+    #print(f"Average distance to trackable point: {avg_dist}")
+    ofsts = torch.tensor(offset)
     retain_ind = torch.tensor(idxs)
-    last_data = {
-        "keypoints": [last_data["keypoints"][0][retain_ind]],
-        "scores": (list(last_data["scores"])[0][retain_ind],),
-        "descriptors": [last_data["descriptors"][0][:,retain_ind]],
-    }
+    #last_data = {
+    #    "keypoints": [last_data["keypoints"][0][retain_ind]],
+    #    "scores": (list(last_data["scores"])[0][retain_ind],),
+    #    "descriptors": [last_data["descriptors"][0][:,retain_ind]],
+    #}
     last_data = {k+"0": last_data[k] for k in keys}
     last_data["image0"] = first_frame
 
@@ -71,8 +81,10 @@ def create_video_tracking(frames, qrs, matching: Matching, device):
         matches = pred['matches0'][0].cpu().numpy()
 
         valid = matches >= 0
-        pts = pred["keypoints1"][0][matches[valid]].cpu()
-        trajs[i+1,:,:][valid] = pts
+        tmp = matches[retain_ind]
+        tmp_vld = valid[retain_ind]
+        pts = pred["keypoints1"][0][tmp[tmp_vld]].cpu()
+        trajs[i+1,:,:][tmp_vld] = pts + ofsts[tmp_vld]
         #display_torch_frame(frames[i+1], pts)
         """
         #Frame by frame tracking
@@ -139,6 +151,16 @@ def create_video_tracking(frames, qrs, matching: Matching, device):
         last_data = {k+"0": last_data[k] for k in keys}
         last_data["image0"] = new_frame
         """
+
+    #Fill in missing points
+    for j in range(qrs.shape[0]):
+        last_point = qrs[j,1:]
+        for i in range(S):
+            if trajs[i,j,0] == -1:
+                trajs[i,j,:] = last_point
+            else:
+                last_point = trajs[i,j,:]
+                
     return trajs, visible
 
         
@@ -162,13 +184,13 @@ else:
 config = {
     "superpoint": {
         "nms_radius": 4,
-        "keypoint_threshold": 0.05,
+        "keypoint_threshold": 0.005,
         "max_keypoints": -1
     },
     "superglue": {
         "weights": "indoor",
         "sinkhorn_iterations": 20,
-        "match_threshold": 0.2
+        "match_threshold": 0.05
     }
     
 }
@@ -208,6 +230,11 @@ with torch.no_grad():
             query=qrs
             )
             predictions.append(data)
+
+            if j % 5 == 0:
+                name = f"{dataset_names[i]}_seq_{j}.gif"
+                path = os.path.join("/scratch_net/biwidl304/amarugg/files/videos", name)
+                save_tap_vid(data, path)
         
 
         #display_tap_vid(predictions[0])

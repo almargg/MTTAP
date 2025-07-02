@@ -9,6 +9,18 @@ from dataclasses import dataclass
 import random
 import cv2
 
+
+def seed_everything(seed: int = 42):
+    """
+    Set random seeds for reproducibility.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 """
 Dataloaders used for all different Datasets
 Args:
@@ -33,8 +45,8 @@ def resize_video(video: torch.Tensor):
         r_frame  = cv2.resize(frame, VIDEO_INPUT_RESO_CV, interpolation = cv2.INTER_AREA) 
         resized_video[j] = r_frame
     resized_video = np.transpose(resized_video, ( 0, 3, 1, 2))
-    out = torch.from_numpy(resized_video).float()
-    return out
+    resized_video = torch.from_numpy(resized_video).float()
+    return resized_video
 
 def sample_queries_first(
     target_occluded: np.ndarray, #N, S, 
@@ -68,17 +80,26 @@ class TapData:
         self.query=query # B, N, 3
 
 
-class KubricDataset(torch.utils.data.DataLoader):
-    def __init__(self, data_root, n_traj=128):
+class KubricDataset(torch.utils.data.Dataset):
+    def __init__(self, data_root, n_traj=256, n_frames=60, random_frame_rate=False):
+        seed = 42
+        seed_everything(seed)
         self.data_root = data_root
         assert n_traj < 2048, "To many trajectories"
         self.n_traj = n_traj
+        self.n_frames = n_frames
+        self.random_frame_rate = random_frame_rate
+
         self.seq_names = [
             fname
             for fname in os.listdir(data_root)
-            if os.path.isdir(os.path.join(data_root, fname))
         ]
+        #TODO: Shuffle sequence names
+        self.seq_names = sorted(self.seq_names) 
+        random.shuffle(self.seq_names)
         print("found %d unique videos in %s" % (len(self.seq_names), data_root))
+        rgb_path = os.path.join(self.data_root, self.seq_names[0], "frames")
+        self.image_paths = sorted(os.listdir(rgb_path))
         
     def __len__(self):
         return len(self.seq_names)
@@ -87,28 +108,32 @@ class KubricDataset(torch.utils.data.DataLoader):
         seq_name = self.seq_names[idx]
         npy_path = os.path.join(self.data_root, seq_name, seq_name + ".npy")
         rgb_path = os.path.join(self.data_root, seq_name, "frames")
-        img_paths = sorted(os.listdir(rgb_path))
         rgbs = []
-        for i, img_path in enumerate(img_paths):
-            rgbs.append(imageio.v2.imread(os.path.join(rgb_path, img_path)))
 
-        rgbs = np.stack(rgbs)
+        # Select num frames to be used
+        if self.random_frame_rate:
+            frame_offset = np.random.uniform(0.8, len(self.image_paths) / self.n_frames)
+        else:
+            frame_offset = 1
+        required_frames = self.n_frames * frame_offset + 1
+        start_idx = np.random.randint(0, len(self.image_paths) - required_frames)
+        idxs = (np.arange(start_idx, start_idx + required_frames - frame_offset, frame_offset) + 0.5).astype(int)
+        img_paths = [self.image_paths[i] for i in idxs]
+
+        rgbs = np.stack([
+            cv2.cvtColor(cv2.imread(os.path.join(rgb_path, im)), cv2.COLOR_BGR2RGB)
+            for im in img_paths
+        ])
+
         rgbs = np.transpose(rgbs, (0, 3, 1, 2))
+
         annot_dict = np.load(npy_path, allow_pickle=True).item()
-        trajs = annot_dict["coords"]
+        trajs = annot_dict["coords"][:,idxs]
         trajs[:,:,0] /= rgbs.shape[2]
         trajs[:,:,1] /= rgbs.shape[3]
-        visibility = annot_dict["visibility"]
+        visibility = annot_dict["visibility"][:,idxs]
+        depths = annot_dict["depth"][:,idxs]
 
-        n_trajs = trajs.shape[0]
-        mask = np.full(n_trajs, False)
-        mask[:self.n_traj] = True
-        np.random.shuffle(mask)
-
-        trajs = trajs[mask]
-        visibility = visibility[mask]
-
-        #TODO ADD data augmentation
         converted = sample_queries_first(visibility, trajs, rgbs)
 
         trajs = (
@@ -120,10 +145,28 @@ class KubricDataset(torch.utils.data.DataLoader):
         ].permute(
             1, 0
         )  # T, N
-        rgbs = resize_video(torch.from_numpy(rgbs))
-        return rgbs.float(), trajs.float(), visibles.float(), query_points.float()
+        depths = torch.from_numpy(depths).permute(1, 0)  # T, N
+        # Sample tracks
 
-class TapvidDavisFirst(torch.utils.data.DataLoader):
+        #TODO: Select random number of trajectories
+        n_trajs = trajs.shape[1]
+        if n_trajs < self.n_traj:
+            print(
+                "WARNING: Not enough trajectories in sequence %s. "
+                "Found %d, but requested %d. Using all available trajectories."
+                % (seq_name, n_trajs, self.n_traj)
+            )
+        else:
+            n_idxs = np.random.choice(n_trajs, self.n_traj, replace=False)
+            trajs = trajs[:, n_idxs]
+            visibles = visibles[:, n_idxs]
+            query_points = query_points[n_idxs]
+            depths = depths[:, n_idxs]
+
+        rgbs = resize_video(torch.from_numpy(rgbs))
+        return rgbs.float(), trajs.float(), visibles.float(), query_points.float(), depths.float()
+
+class TapvidDavisFirst(torch.utils.data.Dataset):
     def __init__(self, data_root):
         with open(data_root, "rb") as f:
             self.points_dataset = pickle.load(f)
@@ -157,7 +200,7 @@ class TapvidDavisFirst(torch.utils.data.DataLoader):
     
 
 
-class TapvidRgbStacking(torch.utils.data.DataLoader):
+class TapvidRgbStacking(torch.utils.data.Dataset):
     def __init__(self, data_root):
         with open(data_root, "rb") as f:
             self.points_dataset = pickle.load(f)
@@ -242,7 +285,7 @@ if __name__=="__main__":
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=1, shuffle=False)
     rgb_loader = torch.utils.data.DataLoader(rgb_stack, batch_size=1, shuffle=False)
 
-    for i, (frames, trajs, vsbls, qrs) in enumerate(rgb_loader):
+    for i, (frames, trajs, vsbls, qrs) in enumerate(train_loader):
 
         print("Frames: Shape ", frames.shape, " dtype: ", frames.dtype, " and ranging from ", torch.min(frames), " to ", torch.max(frames))
         print("Trajectories: Shape ", trajs.shape, " dtype: ", trajs.dtype, " and ranging from ", torch.min(trajs), " to ", torch.max(trajs))

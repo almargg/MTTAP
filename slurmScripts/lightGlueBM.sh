@@ -4,7 +4,6 @@
 #SBATCH --output=/home/amarugg/Documents/logs/%j.out     # where to store the output (%j is the JOBID), subdirectory "log" must exist
 #SBATCH --error=/home/amarugg/Documents/logs/%j.err  # where to store error messages
 #SBATCH --gres=gpu:a6000:1
-#SBATCH --mem=80G
 
 # Exit on errors
 set -o errexit
@@ -30,7 +29,7 @@ echo "Starting on:     $(date)"
 echo "SLURM_JOB_ID:    ${SLURM_JOB_ID}"
 
 #python script
-conda run -n coTracker --no-capture-output python /scratch_net/biwidl304/amarugg/gluTracker/cotracker_bench.py
+conda run -n coTracker --no-capture-output python /scratch_net/biwidl304/amarugg/gluTracker/lightGlue_bench.py
 # Send more noteworthy information to the output log
 echo "Finished at:     $(date)"
 
