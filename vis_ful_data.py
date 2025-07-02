@@ -30,6 +30,13 @@ print(f"Depth images shape: {m_depth.shape}")
 print(f"Depth images dtype: {m_depth.dtype}")
 print(f"Depth images min: {np.min(m_depth)}, max: {np.max(m_depth)}")
 
+# Normalize depth maps to [0, 1]
+m_norm_depth = (m_depth + np.min(m_depth)) / (np.max(m_depth) + np.min(m_depth))  # Normalize depth to [0, 1]
+
+metric_depth_maps = np.stack([
+    cv2.applyColorMap((d * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    for d in m_norm_depth
+])
 
 annot_dict = np.load(npy_path, allow_pickle=True).item()
 
@@ -237,14 +244,15 @@ for i in range(depth_maps.shape[0]):
     
 
     depth_img = depth_maps[i]
+    m_depth_img = metric_depth_maps[i]
     
     segmentation_img = segmentation_colored[i]          
 
-    stacked = np.hstack((img, depth_img, segmentation_img, fig_img))
+    stacked = np.hstack((img, depth_img, m_depth_img, segmentation_img, fig_img))
 
-    cv2.imshow('RGB, Depth, Segmentation and track', stacked)
-    if cv2.waitKey(0) & 0xFF == ord('q'):
-        break
+    #cv2.imshow('RGB, Depth, Segmentation and track', stacked)
+    #if cv2.waitKey(0) & 0xFF == ord('q'):
+    #    break
     cv2.imwrite(os.path.join(data_root, f"frame_{i:04d}.png"), stacked)
     
 cv2.destroyAllWindows()
