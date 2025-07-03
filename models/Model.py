@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.utils.Modules import BasicEncoder
+from models.utils.Modules import BasicEncoder, EfficientUpdateFormer, Mlp
 import cv2
 import numpy as np
 from dataclasses import dataclass
@@ -281,3 +281,75 @@ class GluTracker(nn.Module):
         queries.coordinates = pred_pos.detach()
 
         return queries, pred_vis.detach()
+    
+class DepthTracker(nn.Module):
+    def __init__(
+        self,
+        win_len = 16,
+        corr_radius = 3,
+        corr_levels = 4,
+        corr_stride = 4,
+        model_resolution = (384, 512),
+        num_virtul_tracks = 64,
+
+    ):
+        super().__init__()
+        self.win_len = win_len
+        self.corr_radius = corr_radius
+        self.corr_levels = corr_levels
+        self.corr_stride = corr_stride
+        self.init = None
+        self.tracks = None
+
+        self.fnet = BasicEncoder(stride=corr_stride, model_resolution=model_resolution)
+
+        self.updateformer = EfficientUpdateFormer(
+            space_depth=3,
+            time_depth=3,
+            input_dim=1110,
+            hidden_size=384,
+            num_heads=8,
+            output_dim=4,
+            mlp_ratio= 4,
+            num_virtual_tracks= num_virtul_tracks,
+            add_space_attn= True,
+            linear_layer_for_vis_conf= True,
+        )
+
+        self.corr_mlp = Mlp(
+            in_features= (self.corr_radius* 2 + 1)**4,
+            hidden_features= 384,
+            out_features= 256,
+        )
+
+    def init_tracker(self, frames, queries):
+        self.init = True
+
+    def forward(self, new_frame, mew_queries, iters=4):
+        """
+        Args:
+            new_frame: (C, H, W)
+            new_queries: (nN, 2) - Normalised coordinates in [0, 1]
+            iters: Number of iterations to run the updateformer
+        Returns:
+            tracks: (N, 2) - Normalised coordinates in [0, 1]
+        """
+        if self.init is None:
+            raise ValueError("Tracker not initialized. Call init_tracker first.")
+        C, H, W = new_frame.shape
+        device = new_frame.device
+
+        #Normalise frame
+        new_frame = 2 * (new_frame / 255) - 1
+
+        #Extract features
+        fmap = self.fnet(new_frame[None,:,:,:])  # Add batch dimension
+        fmap = fmap / torch.sqrt(
+            torch.maximum(
+                torch.sum(torch.square(fmap), axis=-1, keepdims=True),
+                torch.tensor(1e-12, device=fmap.device),
+            )
+        )
+
+
+        
