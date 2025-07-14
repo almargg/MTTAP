@@ -109,7 +109,7 @@ def validate(model, loader, device):
 
 val_dataset = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
 
-val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=1, prefetch_factor=1)
+val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=1, prefetch_factor=1)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
