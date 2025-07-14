@@ -4,9 +4,11 @@ import numpy as np
 import sys
 import os
 from dataset.Dataloader import TapvidDavisFirst, TapvidRgbStacking, TapData
-from utils.Visualise import display_tap_vid, save_tap_vid
+#from utils.Visualise import save_tap_vid
 from utils.Metrics import compute_metrics
 from cotracker.cotracker.predictor import CoTrackerOnlinePredictor, CoTrackerPredictor
+from trainOnKubric import track_video
+from models.Model import DepthTracker
 
 davis_dat = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
 davis = torch.utils.data.DataLoader(davis_dat, batch_size=1, shuffle=False)
@@ -31,15 +33,21 @@ else:
 #                window_len=8,
 #            ).to(device)
 
-cotracker = CoTrackerPredictor(
-                checkpoint="/scratch_net/biwidl304/amarugg/cotracker/ckpt/trained/cotracker_three_final.pth",
-                v2=False,
-                offline=True,
-                window_len=60,
-            ).to(device)
+#cotracker = CoTrackerPredictor(
+#                checkpoint="/scratch_net/biwidl304/amarugg/cotracker/ckpt/trained/cotracker_three_final.pth",
+#                v2=False,
+#                offline=True,
+#                window_len=60,
+#            ).to(device)
 
-cotracker.eval()
+online_tracker = DepthTracker().to(device)
 
+#cotracker.eval()
+
+
+
+
+d = {}
 #stepsize = cotracker.step
 
 used_time = 0
@@ -52,30 +60,38 @@ with torch.no_grad():
             video_resolution = frames.shape[3:] #H,W    
             gt = TapData(
                 video=frames,
-                trajectory=trajs* torch.tensor([video_resolution[1], video_resolution[0]]),
+                trajectory=trajs,
                 visibility=vsbls,
                 query=qrs
             )
             gts.append(gt)
 
-            qrs[:,:,1] *= frames.shape[4]
-            qrs[:,:,2] *= frames.shape[3]
-            qrs = qrs.to(device)
-            frames = frames.to(device)
+            #qrs[:,:,1] *= frames.shape[4]
+            #qrs[:,:,2] *= frames.shape[3]
+            #qrs = qrs.to(device)
+            #frames = frames.to(device)
 
-            torch.cuda.synchronize()
+            if device == "cuda":
+                torch.cuda.synchronize()
             start = time.time()
             #cotracker(video_chunk=frames, is_first_step=True, grid_size=0, queries=qrs, add_support_grid=True)
             #for ind in range(0, frames.shape[1] - (cotracker.step * 2) + 1, 1):
             #    pred_tracks, pred_visibility = cotracker(video_chunk=frames[:,ind : ind + cotracker.step * 2], grid_size=0, queries=qrs, add_support_grid=True)
-            pred_tracks, pred_visibility = cotracker(video=frames, grid_size=0, queries=qrs)
-            torch.cuda.synchronize()
+            #pred_tracks, pred_visibility = cotracker(video=frames, grid_size=0, queries=qrs)
+            trajs_pred, vis_pred, confidence_pred, _, times = track_video(online_tracker, frames[0], qrs[0], device)
+            if device == "cuda":
+                torch.cuda.synchronize()
             end = time.time()
             used_time += end - start
 
-            tracks = pred_tracks.cpu().numpy()
-            pred_occ = pred_visibility[0].cpu()
+            for key in times:
+                if key not in d:
+                    d[key] = 0
+                d[key] += times[key]
 
+            tracks = trajs_pred.cpu().numpy()
+            pred_occ = vis_pred[0].cpu()
+            """
             data = TapData(
             video=frames.cpu(),
             trajectory=torch.from_numpy(tracks),
@@ -87,7 +103,7 @@ with torch.no_grad():
             if j % 5 == 0:
                 name = f"{dataset_names[i]}_cot_{j}.gif"
                 path = os.path.join("/scratch_net/biwidl304/amarugg/files/videos", name)
-                save_tap_vid(data, path)
+                #save_tap_vid(data, path)
         avg_thrh_acc =  0
         avg_occ_acc = 0
         avg_jac = 0
@@ -104,6 +120,8 @@ with torch.no_grad():
         print("Occlusion accuracy ", avg_occ_acc / samples)
         print("AVG Jaccard ", avg_jac / samples)
         print("\n")
-
-    print("Time taken: ", used_time)
+        """
+for key in d:
+    print(f"{key}: {d[key]} seconds")
+print("Time taken: ", used_time)
         

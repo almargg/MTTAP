@@ -3,7 +3,7 @@ import tracemalloc
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 import os
-from dataset.Dataloader import KubricDataset, TapvidDavisFirst, TapData
+from dataset.Dataloader import KubricDataset, TapvidDavisFirst, TapData, TapvidRgbStacking
 from utils.Visualise import create_tap_vid, save_tap_vid
 import time
 
@@ -13,31 +13,19 @@ import time
 train_dataset = KubricDataset("/scratch-second/amarugg/kubric_movi_f/kubric/kubric_movi_f_120_frames_dense/tmp")
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=False, num_workers=8, prefetch_factor=8)
 
-base_directory = "/scratch_net/biwidl304/amarugg/files/videos"
+davis_data = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
+davis_loader = torch.utils.data.DataLoader(davis_data, batch_size=1, shuffle=False, num_workers=4, prefetch_factor=2)
+rgb_stack_data = TapvidRgbStacking("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_rgb_stacking/tapvid_rgb_stacking.pkl")
+rgb_stack_loader = torch.utils.data.DataLoader(rgb_stack_data, batch_size=1, shuffle=False, num_workers=4, prefetch_factor=2)
 
-faulty_samples = 0
-start = time.time()
-for i, (frames, trajs, vsbls, qrs, depths) in enumerate(train_loader):
-    trajs[:,:,:,0] *= frames.shape[4]
-    trajs[:,:,:,1] *= frames.shape[3]
-    gt = TapData(
-            frames,
-            trajs,
-            vsbls,
-            qrs
-        )
-    N = trajs.shape[2]  # Number of tracks
-    print(f"Dataset {i} has {N} tracks")
-    if N < 256:
-        faulty_samples += 1
+val_loaders = [davis_loader, rgb_stack_loader]
 
-    #snapshot = tracemalloc.take_snapshot()
-    #top_stats = snapshot.statistics('lineno')
-        file_name = f"dataset_{i}.gif"
-        path = os.path.join(base_directory, file_name)
-        save_tap_vid(gt, path)
-    if i == 20:
-        break
-#end = time.time()
-#print(f"Time taken: {end - start} seconds")
-print(f"Number of faulty samples: {faulty_samples}")
+n_frames = 0
+
+for val_loader in val_loaders:
+    for i, (frames, trajs, vsbls, qrs) in enumerate(val_loader):
+        n_frames += frames.shape[1]
+        if i % 20 == 0:
+            print(f"Processed {i} samples in validation dataset.")
+        
+print(f"Total number of frames in validation datasets: {n_frames}")

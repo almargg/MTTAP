@@ -24,24 +24,24 @@ if metric == None:
     model.load_state_dict(torch.load(f'DepthAnythingV2/checkpoints/depth_anything_v2_{encoder}.pth', map_location='cpu'))
 else:
     from DepthAnythingV2.metric_depth.depth_anything_v2.dpt import DepthAnythingV2
-    max_depth = 50
+    max_depth = 20
     model = DepthAnythingV2(**{**model_configs[encoder], 'max_depth': max_depth})
-    model.load_state_dict(torch.load(f'DepthAnythingV2/checkpoints/depth_anything_v2_metric_hypersim_{encoder}.pth', map_location='cpu'))
+    model.load_state_dict(torch.load(f'/scratch_net/biwidl304/amarugg/gluTracker/DepthAnythingV2/checkpoints/depth_anything_v2_metric_hypersim_{encoder}.pth', map_location='cpu'))
 model = model.to(DEVICE).eval()
 
-#davis_dat = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
-#davis = torch.utils.data.DataLoader(davis_dat, batch_size=1, shuffle=False)
+davis_dat = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
+davis = torch.utils.data.DataLoader(davis_dat, batch_size=1, shuffle=False)
 
 #rgb_stack_dat = TapvidRgbStacking("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_rgb_stacking/tapvid_rgb_stacking.pkl")
 #rgb_stack = torch.utils.data.DataLoader(rgb_stack_dat, batch_size=1, shuffle=False)
 
-train_dataset = KubricDataset("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/kubric/kubric_movi_f_120_frames_dense/tmp")
-train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=False, num_workers=1, prefetch_factor=1)
+train_dataset = KubricDataset("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/kubric/kubric_movi_f_120_frames_dense/movi_f")
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=False, num_workers=8, prefetch_factor=4)
 
 #raw_img = cv2.imread('your/image/path')
 #depth = model.infer_image(raw_img) # HxW raw depth map in numpy
-def display_depth_maps(train_loader, model):
-    for i, (frames, trajs, vsbls, qrs, depth) in enumerate(train_loader):
+def display_depth_maps(train_loader, model: DepthAnythingV2):
+    for i, (frames, trajs, vsbls, qrs) in enumerate(train_loader):
             
             # Move frames to CPU and convert to numpy in one go
             device = frames.device
@@ -66,6 +66,7 @@ def display_depth_maps(train_loader, model):
 
             with torch.no_grad():
                 out = model(tmp)
+                
 
             # Vectorized upsampling
             depth_maps = F.interpolate(
@@ -86,7 +87,9 @@ def display_depth_maps(train_loader, model):
                 cv2.imshow('Frame and Depth Map', combined)
                 cv2.waitKey(0)  # Wait for a key press to show the next frame
             cv2.destroyAllWindows()
-def compute_depth(self, x):
+
+
+def compute_depth(model, x):
     """
     Compute depth using the DepthAnythingV2 model.
     Args:
@@ -111,11 +114,11 @@ def compute_depth(self, x):
     input_size=518
     frames = []
     for frame in frames_bgr:
-        image, (h, w) = self.depth_anything.image2tensor(frame, input_size)
+        image, (h, w) = model.image2tensor(frame, input_size)
         frames.append(image)
     frames = torch.stack(frames, dim=0)[:, 0, :, :, :].to(device)  # (B, H, W, C)
     with torch.no_grad():
-        out = self.depth_anything(frames)
+        out = model(frames)
     depth_maps = F.interpolate(
         out.unsqueeze(1), 
         size=(h,w), 
@@ -259,5 +262,40 @@ def sanity_check(train_loader, model):
         sampled_depths, mask = sample_depth(depth_maps, trajs[0])
         plot_depth_points(sampled_depths, depth[0], mask)
 
-sanity_check(train_loader, model)
+#sanity_check(train_loader, model)
+
+outs = []
+
+for i, (frames, trajs, vsbls, qrs) in enumerate(davis):
+    out = compute_depth(model, frames[0].to(DEVICE))
+    outs.append(out.detach().cpu())
+    #min_depth = min(min_depth, out.detach().min().item())
+    #max_depth = max(max_depth, out.detach().max().item())
+    if i == 0:
+        break
+
+out = torch.cat(outs, dim=0)  # Concatenate outputs along batch dimension
+
+out = torch.log10(out + 1e-6)  # Apply log10 to the output tensor
+mean = out.mean().item()
+std = out.std().item()
+
+print(f"Mean of log10 Depth: {mean}, Std of log10 Depth: {std}")
+
+out = (out - mean) / std  # Center the output tensor by subtracting the mean
+
+import matplotlib.pyplot as plt
+
+# Flatten the tensor for histogram
+out_flat = out.cpu().numpy().flatten()
+
+plt.figure(figsize=(8, 4))
+plt.hist(out_flat, bins=100, color='skyblue', edgecolor='black')
+plt.title('Distribution of Normalized log10 Depth Values')
+plt.xlabel('Normalized log10 Depth')
+plt.ylabel('Frequency')
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
             

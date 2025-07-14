@@ -27,7 +27,7 @@ Args:
     data_root: String containing the absolute path to the dataset
 Returns:
     rgbs: Video tensor in shape of (S, C, H, W) (int) from [0,255] with H==384 and W==512
-    trajs: Trajectory tensor in shape of (S, N, 2) each point is [x,y] (float) from [0,1]^2
+    trajs: Trajectory tensor in shape of (S, N, 2) each point is [x,y] (float) from [0,H]x[0,W]
     visibles: Visibility tensor in shape of (S, N) (bool) from [0,1]
     query_points: Tensor of query points in shape of (N, 3) each point is [t, x, y] (float) from [0,N-1]x[0,1]^2
 
@@ -81,7 +81,7 @@ class TapData:
 
 
 class KubricDataset(torch.utils.data.Dataset):
-    def __init__(self, data_root, n_traj=256, n_frames=60, random_frame_rate=False):
+    def __init__(self, data_root, n_traj=256, n_frames=30, random_frame_rate=False):
         seed = 42
         seed_everything(seed)
         self.data_root = data_root
@@ -129,10 +129,13 @@ class KubricDataset(torch.utils.data.Dataset):
 
         annot_dict = np.load(npy_path, allow_pickle=True).item()
         trajs = annot_dict["coords"][:,idxs]
-        trajs[:,:,0] /= rgbs.shape[2]
-        trajs[:,:,1] /= rgbs.shape[3]
+        #trajs[:,:,0] /= rgbs.shape[2]
+        #trajs[:,:,1] /= rgbs.shape[3]
         visibility = annot_dict["visibility"][:,idxs]
-        depths = annot_dict["depth"][:,idxs]
+        #depths = annot_dict["depth"][:,idxs]
+
+        trajs[:,:,0] *= VIDEO_INPUT_RESO_CV[0] / rgbs.shape[3]  # Rescale x-coordinates to image width
+        trajs[:,:,1] *= VIDEO_INPUT_RESO_CV[1] / rgbs.shape[2]  # Rescale y-coordinates to image height
 
         converted = sample_queries_first(visibility, trajs, rgbs)
 
@@ -145,7 +148,7 @@ class KubricDataset(torch.utils.data.Dataset):
         ].permute(
             1, 0
         )  # T, N
-        depths = torch.from_numpy(depths).permute(1, 0)  # T, N
+        #depths = torch.from_numpy(depths).permute(1, 0)  # T, N
         # Sample tracks
 
         #TODO: Select random number of trajectories
@@ -161,10 +164,10 @@ class KubricDataset(torch.utils.data.Dataset):
             trajs = trajs[:, n_idxs]
             visibles = visibles[:, n_idxs]
             query_points = query_points[n_idxs]
-            depths = depths[:, n_idxs]
+            #depths = depths[:, n_idxs]
 
         rgbs = resize_video(torch.from_numpy(rgbs))
-        return rgbs.float(), trajs.float(), visibles.float(), query_points.float(), depths.float()
+        return rgbs.float(), trajs.float(), visibles.float(), query_points.float()#, depths.float()
 
 class TapvidDavisFirst(torch.utils.data.Dataset):
     def __init__(self, data_root):
@@ -182,6 +185,8 @@ class TapvidDavisFirst(torch.utils.data.Dataset):
         frames = video["video"]
 
         target_points = self.points_dataset[video_name]["points"]
+        target_points[:,:,0 ] *= VIDEO_INPUT_RESO_CV[0]
+        target_points[:,:,1 ] *= VIDEO_INPUT_RESO_CV[1]
         target_occ = self.points_dataset[video_name]["occluded"]
         converted = sample_queries_first(target_occ, target_points, frames)
         trajs = (
@@ -216,6 +221,8 @@ class TapvidRgbStacking(torch.utils.data.Dataset):
         frames = video["video"]
 
         target_points = self.points_dataset[video_name]["points"]
+        target_points[:,:,0 ] *= VIDEO_INPUT_RESO_CV[0]
+        target_points[:,:,1 ] *= VIDEO_INPUT_RESO_CV[1]
         target_occ = self.points_dataset[video_name]["occluded"]
         converted = sample_queries_first(target_occ, target_points, frames)
         trajs = (
@@ -285,7 +292,9 @@ if __name__=="__main__":
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=1, shuffle=False)
     rgb_loader = torch.utils.data.DataLoader(rgb_stack, batch_size=1, shuffle=False)
 
-    for i, (frames, trajs, vsbls, qrs) in enumerate(train_loader):
+    for i, (frames, trajs, vsbls, qrs) in enumerate(rgb_loader):
+
+        print("Max Value in x axis: ", torch.max(qrs[:,:,1]), " and in y axis: ", torch.max(qrs[:,:,2]))
 
         print("Frames: Shape ", frames.shape, " dtype: ", frames.dtype, " and ranging from ", torch.min(frames), " to ", torch.max(frames))
         print("Trajectories: Shape ", trajs.shape, " dtype: ", trajs.dtype, " and ranging from ", torch.min(trajs), " to ", torch.max(trajs))

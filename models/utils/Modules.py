@@ -5,6 +5,7 @@ from functools import partial
 from typing import Callable
 import collections
 from itertools import repeat
+import time
 
 # From PyTorch internals
 def _ntuple(n):
@@ -133,6 +134,48 @@ class Mlp(nn.Module):
         x = self.drop2(x)
         return x
 
+class TimeMining(nn.Module):
+    """
+    Time mining module that computes scaled dot-product attention.
+    """
+    def __init__(
+        self, query_dim, context_dim=None, num_heads=8, dim_head=48, qkv_bias=False
+    ):
+        super().__init__()
+        inner_dim = dim_head * num_heads
+        context_dim = default(context_dim, query_dim)
+        self.scale = dim_head**-0.5
+        self.heads = num_heads
+
+        self.to_q = nn.Linear(query_dim, inner_dim, bias=qkv_bias)
+        self.to_kv = nn.Linear(context_dim, inner_dim * 2, bias=qkv_bias)
+        self.to_out = nn.Linear(inner_dim, query_dim)
+
+    #(B N) T C
+    def forward(self, x, context=None, attn_bias=None):
+        
+        h = self.heads
+
+        past = x[:, :-1, :]  # (B, N1-1, C)
+        current = x[:, -1:, :]  # (B, 1, C)
+        
+        B, N2, C = past.shape
+
+        q = self.to_q(current).reshape(B, 1, h, C // h).permute(0, 2, 1, 3)
+        k, v = self.to_kv(past).chunk(2, dim=-1)
+
+        
+        k = k.reshape(B, N2, h, C // h).permute(0, 2, 1, 3)
+        v = v.reshape(B, N2, h, C // h).permute(0, 2, 1, 3)
+
+        sim = (q @ k.transpose(-2, -1)) * self.scale
+
+        if attn_bias is not None:
+            sim = sim + attn_bias
+        attn = sim.softmax(dim=-1)
+
+        x = (attn @ v).transpose(1, 2).reshape(B, 1, C)
+        return self.to_out(x)
 
 #TODO ADD option for scaled dot-product attention
 class Attention(nn.Module):
@@ -205,22 +248,71 @@ class CrossAttnBlock(nn.Module):
 
     def forward(self, x, context, mask=None):
         attn_bias = None
-        if mask is not None:
-            if mask.shape[1] == x.shape[1]:
-                mask = mask[:, None, :, None].expand(
-                    -1, self.cross_attn.heads, -1, context.shape[1]
-                )
-            else:
-                mask = mask[:, None, None].expand(
-                    -1, self.cross_attn.heads, x.shape[1], -1
-                )
+        #if mask is not None:
+        #    if mask.shape[1] == x.shape[1]:
+        #        mask = mask[:, None, :, None].expand(
+        #            -1, self.cross_attn.heads, -1, context.shape[1]
+        #        )
+        #    else:
+        #        mask = mask[:, None, None].expand(
+        #            -1, self.cross_attn.heads, x.shape[1], -1
+        #        )
 
-            max_neg_value = -torch.finfo(x.dtype).max
-            attn_bias = (~mask) * max_neg_value
+        #    max_neg_value = -torch.finfo(x.dtype).max
+        #    attn_bias = (~mask) * max_neg_value
+        times = {}
+        if x.device == "cuda":
+            torch.cuda.synchronize()
+        start = time.time()
         x = x + self.cross_attn(
             self.norm1(x), context=self.norm_context(context), attn_bias=attn_bias
         )
+        if x.device == "cuda":
+            torch.cuda.synchronize()
+        end = time.time()
+        times["Cross Attention"] = end - start
+
         x = x + self.mlp(self.norm2(x))
+        if x.device == "cuda":
+            torch.cuda.synchronize()
+        start = time.time()
+
+        times["MLP"] = start - end
+
+        return x, times
+    
+class timeMiningBlock(nn.Module):
+    """
+    timeMining is a module that performs self-attention followed by a feed-forward network.
+    """
+    def __init__(
+        self,
+        hidden_size,
+        num_heads,
+        attn_class: Callable[..., nn.Module] = TimeMining,
+        mlp_ratio=4.0,
+        **block_kwargs
+    ):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.attn = attn_class(
+            hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs
+        )
+
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        self.mlp = Mlp(
+            in_features=hidden_size,
+            hidden_features=mlp_hidden_dim,
+            act_layer=approx_gelu,
+            drop=0,
+        )
+
+    def forward(self, x):
+        #tmp = self.attn(self.norm1(x), attn_bias=None)
+        x[:, -1, :] = x[:, -1, :].clone() + self.attn(self.norm1(x.clone()), attn_bias=None)[:,0,:]
+        x[:, -1, :] = x[:, -1, :].clone() + self.mlp(self.norm2(x[:, -1, :].clone()))
         return x
 
 
@@ -255,17 +347,37 @@ class AttnBlock(nn.Module):
     def forward(self, x, mask=None):
         #mask is None
         attn_bias = mask
-        if mask is not None:
-            mask = (
-                (mask[:, None] * mask[:, :, None])
-                .unsqueeze(1)
-                .expand(-1, self.attn.num_heads, -1, -1)
-            )
-            max_neg_value = -torch.finfo(x.dtype).max
-            attn_bias = (~mask) * max_neg_value
+        #if mask is not None:
+        #    mask = (
+        #        (mask[:, None] * mask[:, :, None])
+        #        .unsqueeze(1)
+        #        .expand(-1, self.attn.num_heads, -1, -1)
+        #    )
+        #    max_neg_value = -torch.finfo(x.dtype).max
+        #    attn_bias = (~mask) * max_neg_value
+        times = {}
+        if x.device == "cuda":
+            torch.cuda.synchronize()
+        start = time.time()
+
         x = x + self.attn(self.norm1(x), attn_bias=attn_bias)
+
+        if x.device == "cuda":
+            torch.cuda.synchronize()
+        end = time.time()
+        times["Self Attention"] = end - start
+
+        if x.device == "cuda":
+            torch.cuda.synchronize()
+        start = time.time()
+
         x = x + self.mlp(self.norm2(x))
-        return x
+
+        if x.device == "cuda":
+            torch.cuda.synchronize()
+        end = time.time()
+        times["MLP"] = end - start
+        return x, times
 
 
 
@@ -371,6 +483,7 @@ class EfficientUpdateFormer(nn.Module):
         num_virtual_tracks=64,
         add_space_attn=True,
         linear_layer_for_vis_conf=False,
+        only_last=True,
     ):
         super().__init__()
         self.out_channels = 2
@@ -388,17 +501,31 @@ class EfficientUpdateFormer(nn.Module):
         )
         self.add_space_attn = add_space_attn
         self.linear_layer_for_vis_conf = linear_layer_for_vis_conf
-        self.time_blocks = nn.ModuleList(
-            [
-                AttnBlock(
-                    hidden_size,
-                    num_heads,
-                    mlp_ratio=mlp_ratio,
-                    attn_class=Attention,
-                )
-                for _ in range(time_depth)
-            ]
-        )
+        self.only_last = only_last
+        if only_last:
+            self.time_blocks = nn.ModuleList(
+                [
+                    timeMiningBlock(
+                        hidden_size,
+                        num_heads,
+                        mlp_ratio=mlp_ratio,
+                        attn_class=TimeMining,
+                    )
+                    for _ in range(time_depth)
+                ]
+            )
+        else:
+            self.time_blocks = nn.ModuleList(
+                [
+                    AttnBlock(
+                        hidden_size,
+                        num_heads,
+                        mlp_ratio=mlp_ratio,
+                        attn_class=Attention,
+                    )
+                    for _ in range(time_depth)
+                ]
+            )
 
         if add_space_attn:
             self.space_virtual_blocks = nn.ModuleList(
@@ -451,8 +578,22 @@ class EfficientUpdateFormer(nn.Module):
         self.apply(_basic_init)
 
     def forward(self, input_tensor, mask=None, add_space_attn=True):
+        times = {}
         # Linear layer to transform input tensor
+        if input_tensor.device == "cuda":
+            torch.cuda.synchronize()
+        start = time.time()
+        
         tokens = self.input_transform(input_tensor)
+
+        if input_tensor.device == "cuda":
+            torch.cuda.synchronize()
+        end = time.time()
+
+        times["Tokenisation"] = end - start
+
+        times["Time Attention"] = 0
+        times["Space Attention"] = 0
 
         B, _, T, _ = tokens.shape
         # Parameters
@@ -463,43 +604,91 @@ class EfficientUpdateFormer(nn.Module):
         j = 0
         layers = []
         for i in range(len(self.time_blocks)):
+            if input_tensor.device == "cuda":
+                torch.cuda.synchronize()
+            start = time.time()
             time_tokens = tokens.contiguous().view(B * N, T, -1)  # B N T C -> (B N) T C
             # Apply time attention blocks
-            time_tokens = self.time_blocks[i](time_tokens)
+            if self.only_last:
+                time_tokens = self.time_blocks[i](time_tokens)
+            else:
+                time_tokens, _ = self.time_blocks[i](time_tokens)
 
             tokens = time_tokens.view(B, N, T, -1)  # (B N) T C -> B N T C
+
+            if input_tensor.device == "cuda":
+                torch.cuda.synchronize()
+            end = time.time()
+            times["Time Attention"] += end - start
+
+            if input_tensor.device == "cuda":
+                torch.cuda.synchronize()
+            start = time.time()
             if (
                 add_space_attn
                 and hasattr(self, "space_virtual_blocks")
                 and (i % (len(self.time_blocks) // len(self.space_virtual_blocks)) == 0)
-            ):
-                space_tokens = (
-                    tokens.permute(0, 2, 1, 3).contiguous().view(B * T, N, -1)
-                )  # B N T C -> (B T) N C
+            ):  
+                if self.only_last:
+                    space_tokens = tokens[:, :, -1, :].contiguous().view(B, N, -1)
+                else:
+                    space_tokens = (
+                        tokens.permute(0, 2, 1, 3).contiguous().view(B*T, N, -1)
+                    )  # B N T C -> (B T) N C
 
                 point_tokens = space_tokens[:, : N - self.num_virtual_tracks]
                 virtual_tokens = space_tokens[:, N - self.num_virtual_tracks :]
 
-                virtual_tokens = self.space_virtual2point_blocks[j](
+                virtual_tokens, timings = self.space_virtual2point_blocks[j](
                     virtual_tokens, point_tokens, mask=mask
                 )
+                for key in timings:
+                    if "R2V" + key not in times:
+                        times["R2V" + key] = 0
+                    times["R2V" + key] += timings[key]
 
-                virtual_tokens = self.space_virtual_blocks[j](virtual_tokens)
-                point_tokens = self.space_point2virtual_blocks[j](
+                virtual_tokens, timings = self.space_virtual_blocks[j](virtual_tokens)
+
+                for key in timings:
+                    if "V2V" + key not in times:
+                        times["V2V" + key] = 0
+                    times["V2V" + key] += timings[key]
+
+                point_tokens, timings = self.space_point2virtual_blocks[j](
                     point_tokens, virtual_tokens, mask=mask
                 )
 
+                for key in timings:
+                    if "V2R" + key not in times:
+                        times["V2R" + key] = 0
+                    times["V2R" + key] += timings[key]
+
                 space_tokens = torch.cat([point_tokens, virtual_tokens], dim=1)
-                tokens = space_tokens.view(B, T, N, -1).permute(
-                    0, 2, 1, 3
-                )  # (B T) N C -> B N T C
+                if self.only_last:   
+                    tokens[:, :, -1, :] = space_tokens
+                else:
+                    tokens = space_tokens.view(B, T, N, -1).permute(0, 2, 1, 3)
                 j += 1
+
+            if input_tensor.device == "cuda":
+                torch.cuda.synchronize()
+            end = time.time()
+            times["Space Attention"] += end - start
+                
         tokens = tokens[:, : N - self.num_virtual_tracks]
+
+        if input_tensor.device == "cuda":
+            torch.cuda.synchronize()
+        start = time.time()
 
         flow = self.flow_head(tokens)
         if self.linear_layer_for_vis_conf:
             vis_conf = self.vis_conf_head(tokens)
             flow = torch.cat([flow, vis_conf], dim=-1)
+        if input_tensor.device == "cuda":
+            torch.cuda.synchronize()
+        end = time.time()
+        times["Flow Head"] = end - start
 
-        return flow
+        return flow, times
     
