@@ -260,26 +260,26 @@ class CrossAttnBlock(nn.Module):
 
         #    max_neg_value = -torch.finfo(x.dtype).max
         #    attn_bias = (~mask) * max_neg_value
-        times = {}
-        if x.device == "cuda":
-            torch.cuda.synchronize()
-        start = time.time()
+        #times = {}
+        #if x.device == "cuda":
+        #    torch.cuda.synchronize()
+        #start = time.time()
         x = x + self.cross_attn(
             self.norm1(x), context=self.norm_context(context), attn_bias=attn_bias
         )
-        if x.device == "cuda":
-            torch.cuda.synchronize()
-        end = time.time()
-        times["Cross Attention"] = end - start
+        #if x.device == "cuda":
+        #    torch.cuda.synchronize()
+        #end = time.time()
+        #times["Cross Attention"] = end - start
 
         x = x + self.mlp(self.norm2(x))
-        if x.device == "cuda":
-            torch.cuda.synchronize()
-        start = time.time()
+        #if x.device == "cuda":
+        #    torch.cuda.synchronize()
+        #start = time.time()
 
-        times["MLP"] = start - end
+        #times["MLP"] = start - end
 
-        return x, times
+        return x#, times
     
 class timeMiningBlock(nn.Module):
     """
@@ -355,29 +355,29 @@ class AttnBlock(nn.Module):
         #    )
         #    max_neg_value = -torch.finfo(x.dtype).max
         #    attn_bias = (~mask) * max_neg_value
-        times = {}
-        if x.device == "cuda":
-            torch.cuda.synchronize()
-        start = time.time()
+        #times = {}
+        #if x.device == "cuda":
+        #    torch.cuda.synchronize()
+        #start = time.time()
 
         x = x + self.attn(self.norm1(x), attn_bias=attn_bias)
 
-        if x.device == "cuda":
-            torch.cuda.synchronize()
-        end = time.time()
-        times["Self Attention"] = end - start
+        #if x.device == "cuda":
+        #    torch.cuda.synchronize()
+        #end = time.time()
+        #times["Self Attention"] = end - start
 
-        if x.device == "cuda":
-            torch.cuda.synchronize()
-        start = time.time()
+        #if x.device == "cuda":
+        #    torch.cuda.synchronize()
+        #start = time.time()
 
         x = x + self.mlp(self.norm2(x))
 
-        if x.device == "cuda":
-            torch.cuda.synchronize()
-        end = time.time()
-        times["MLP"] = end - start
-        return x, times
+        #if x.device == "cuda":
+        #    torch.cuda.synchronize()
+        #end = time.time()
+        #times["MLP"] = end - start
+        return x#, times
 
 
 
@@ -483,7 +483,7 @@ class EfficientUpdateFormer(nn.Module):
         num_virtual_tracks=64,
         add_space_attn=True,
         linear_layer_for_vis_conf=False,
-        only_last=True,
+        only_last=False,
     ):
         super().__init__()
         self.out_channels = 2
@@ -580,20 +580,20 @@ class EfficientUpdateFormer(nn.Module):
     def forward(self, input_tensor, mask=None, add_space_attn=True):
         times = {}
         # Linear layer to transform input tensor
-        if input_tensor.device == "cuda":
-            torch.cuda.synchronize()
-        start = time.time()
+        #if input_tensor.device == "cuda":
+        #    torch.cuda.synchronize()
+        #start = time.time()
         
         tokens = self.input_transform(input_tensor)
 
-        if input_tensor.device == "cuda":
-            torch.cuda.synchronize()
-        end = time.time()
+        #if input_tensor.device == "cuda":
+        #    torch.cuda.synchronize()
+        #end = time.time()
 
-        times["Tokenisation"] = end - start
+        #times["Tokenisation"] = end - start
 
-        times["Time Attention"] = 0
-        times["Space Attention"] = 0
+        #times["Time Attention"] = 0
+        #times["Space Attention"] = 0
 
         B, _, T, _ = tokens.shape
         # Parameters
@@ -604,26 +604,26 @@ class EfficientUpdateFormer(nn.Module):
         j = 0
         layers = []
         for i in range(len(self.time_blocks)):
-            if input_tensor.device == "cuda":
-                torch.cuda.synchronize()
-            start = time.time()
+            #if input_tensor.device == "cuda":
+            #    torch.cuda.synchronize()
+            #start = time.time()
             time_tokens = tokens.contiguous().view(B * N, T, -1)  # B N T C -> (B N) T C
             # Apply time attention blocks
             if self.only_last:
                 time_tokens = self.time_blocks[i](time_tokens)
             else:
-                time_tokens, _ = self.time_blocks[i](time_tokens)
+                time_tokens = self.time_blocks[i](time_tokens)
 
             tokens = time_tokens.view(B, N, T, -1)  # (B N) T C -> B N T C
 
-            if input_tensor.device == "cuda":
-                torch.cuda.synchronize()
-            end = time.time()
-            times["Time Attention"] += end - start
+            #if input_tensor.device == "cuda":
+            #    torch.cuda.synchronize()
+            #end = time.time()
+            #times["Time Attention"] += end - start
 
-            if input_tensor.device == "cuda":
-                torch.cuda.synchronize()
-            start = time.time()
+            #if input_tensor.device == "cuda":
+            #    torch.cuda.synchronize()
+            #start = time.time()
             if (
                 add_space_attn
                 and hasattr(self, "space_virtual_blocks")
@@ -639,29 +639,29 @@ class EfficientUpdateFormer(nn.Module):
                 point_tokens = space_tokens[:, : N - self.num_virtual_tracks]
                 virtual_tokens = space_tokens[:, N - self.num_virtual_tracks :]
 
-                virtual_tokens, timings = self.space_virtual2point_blocks[j](
+                virtual_tokens = self.space_virtual2point_blocks[j](
                     virtual_tokens, point_tokens, mask=mask
                 )
-                for key in timings:
-                    if "R2V" + key not in times:
-                        times["R2V" + key] = 0
-                    times["R2V" + key] += timings[key]
+                #for key in timings:
+                #    if "R2V" + key not in times:
+                #        times["R2V" + key] = 0
+                #    times["R2V" + key] += timings[key]
 
-                virtual_tokens, timings = self.space_virtual_blocks[j](virtual_tokens)
+                virtual_tokens = self.space_virtual_blocks[j](virtual_tokens)
 
-                for key in timings:
-                    if "V2V" + key not in times:
-                        times["V2V" + key] = 0
-                    times["V2V" + key] += timings[key]
+                #for key in timings:
+                #    if "V2V" + key not in times:
+                #        times["V2V" + key] = 0
+                #    times["V2V" + key] += timings[key]
 
-                point_tokens, timings = self.space_point2virtual_blocks[j](
+                point_tokens = self.space_point2virtual_blocks[j](
                     point_tokens, virtual_tokens, mask=mask
                 )
 
-                for key in timings:
-                    if "V2R" + key not in times:
-                        times["V2R" + key] = 0
-                    times["V2R" + key] += timings[key]
+                #for key in timings:
+                #    if "V2R" + key not in times:
+                #        times["V2R" + key] = 0
+                #    times["V2R" + key] += timings[key]
 
                 space_tokens = torch.cat([point_tokens, virtual_tokens], dim=1)
                 if self.only_last:   
@@ -670,25 +670,25 @@ class EfficientUpdateFormer(nn.Module):
                     tokens = space_tokens.view(B, T, N, -1).permute(0, 2, 1, 3)
                 j += 1
 
-            if input_tensor.device == "cuda":
-                torch.cuda.synchronize()
-            end = time.time()
-            times["Space Attention"] += end - start
+            #if input_tensor.device == "cuda":
+            #    torch.cuda.synchronize()
+            #end = time.time()
+            #times["Space Attention"] += end - start
                 
         tokens = tokens[:, : N - self.num_virtual_tracks]
 
-        if input_tensor.device == "cuda":
-            torch.cuda.synchronize()
-        start = time.time()
+        #if input_tensor.device == "cuda":
+        #    torch.cuda.synchronize()
+        #start = time.time()
 
         flow = self.flow_head(tokens)
         if self.linear_layer_for_vis_conf:
             vis_conf = self.vis_conf_head(tokens)
             flow = torch.cat([flow, vis_conf], dim=-1)
-        if input_tensor.device == "cuda":
-            torch.cuda.synchronize()
-        end = time.time()
-        times["Flow Head"] = end - start
+        #if input_tensor.device == "cuda":
+        #    torch.cuda.synchronize()
+        #end = time.time()
+        #times["Flow Head"] = end - start
 
-        return flow, times
+        return flow#, times
     
