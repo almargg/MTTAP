@@ -22,8 +22,9 @@ def validate(model, loader, device):
         loss_sum  = 0
 
         for i, (frames, trajs, vsbls, qrs) in enumerate(loader):
+            
 
-            trajs_pred, vis_pred, confidence_pred = model(frames, qrs)
+            trajs_pred, vis_pred, confidence_pred = model(frames.to(device), qrs.to(device))
             trajs_pred, vis_pred = trajs_pred.cpu(), vis_pred.cpu()
 
 
@@ -61,7 +62,7 @@ val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=1, shuffle=Fals
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 model = DepthTracker().to(device)
-#model.cotracker.load_state_dict(torch.load("/scratch_net/biwidl304/amarugg/gluTracker/weights/depth_Tracker_final.pth", map_location=device))
+model.cotracker.load_state_dict(torch.load("/scratch_net/biwidl304/amarugg/gluTracker/weights/depth_Tracker_final.pth", map_location=device))
 #model.load()
 #model.to(device)
 
