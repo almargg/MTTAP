@@ -180,6 +180,7 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     model = DepthTracker().to(device)
+    model.cotracker.load_state_dict(torch.load("/scratch_net/biwidl304/amarugg/gluTracker/weights/depth_Tracker_final.pth", map_location=device))
 
     print(f"Loaded model of {sum(p.numel() for p in model.parameters())} Parameters")
 
