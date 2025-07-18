@@ -9,61 +9,6 @@ from utils.Metrics import compute_metrics, compute_avg_distance
 from utils.Visualise import create_tap_vid
 
 
-def get_new_queries(qrs, j):
-    """
-    Get new queries for the current frame.
-    :param qrs: Tensor of queries with shape (K, 1)
-    :param j: Current frame index
-    :return: New queries for the current frame
-    """
-    new_ptns = qrs[:, 0] == j
-    return qrs[new_ptns, 1:], new_ptns
-
-
-def track_video(model, frames, qrs, device):
-    """
-    Track a video using the model.
-    :param model: The tracking model
-    :param frames: Tensor of frames with shape (S, C, H, W)
-    :param qrs: Tensor of queries with shape (N, 3)
-    :param device: Device to run the model on
-    :return: Predicted trajectories, visibility, and confidence scores
-    """
-    
-    S, C, H, W = frames.shape
-    N, _ = qrs.shape
-
-    frames, qrs = frames.to(device), qrs.to(device)
-
-    trajs_pred = torch.zeros(S, N, 2, device=device)
-    vis_pred = torch.zeros(S, N, device=device)
-    confidence_pred = torch.zeros(S, N, device=device)
-    valids = torch.zeros(S, N, device=device) == 1
-
-    
-    model.reset_tracker() #Reset the model tracker for each batch
-    new_ptns, mask = get_new_queries(qrs, 0)
-    model.init_tracker(frames[0,:,:,:], new_ptns) #Initialize the model with the first frame and queries
-    for j in range(1, S, 1): #Iterate over frames
-        coords, vis, confidence = model(frames[j,:,:,:]) #Run the model on the current frame
-        trajs_pred[j][mask] = coords
-        vis_pred[j][mask] = vis
-        confidence_pred[j][mask] = confidence
-
-        #for key in times:
-        #    if key not in d:
-        #        d[key] = 0
-        #    d[key] += times[key]
-
-        valids[j][mask] = True
-        new_ptns, tmp_msk = get_new_queries(qrs, j) #Get new queries for the current frame
-        n_new = new_ptns.shape[0]
-        if n_new == 0:
-            continue
-        mask = mask | tmp_msk 
-        model.add_tracks(new_ptns)
-        
-    return trajs_pred, vis_pred, confidence_pred, valids
 
 
 def validate(model, loader, writer: SummaryWriter, epoch, device):
@@ -155,9 +100,9 @@ def train(model, train_loader, val_loader, loss_fnct, optimiser, writer, n_steps
     
 #TODO: Add saving for optimiser and sceduler state
 #TODO: Add usage of bfloat and gradient scaling
-#TODO: Fix video saving for tensorboard
+
 def main():
-    lr = 0.0005
+    lr = 0.00001
     wedecay = 0.00001
     batch_size = 1
     n_steps = 10_001
@@ -167,7 +112,7 @@ def main():
 
     now = datetime.now()
     now_str = now.strftime(("%d.%m.%Y_%H:%M:%S"))
-    writer_dir = os.path.join("/scratch_net/biwidl304/amarugg/gluTracker/runs", now_str)
+    writer_dir = os.path.join("/scratch_net/biwidl304/amarugg/gluTracker/runs", now_str).replace("\\", "/" )
     os.mkdir(writer_dir)
     writer = SummaryWriter(log_dir=writer_dir)
 
