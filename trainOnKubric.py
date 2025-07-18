@@ -44,21 +44,25 @@ def validate(model, loader, writer: SummaryWriter, epoch, device):
             jac += avg_jac
             n += 1
 
-            if (epoch % vis_all_n_epoch) == 4:
-                if (i % 10) == 0:
-                    video = create_tap_vid(pred)
-                    writer.add_video(f"TapVidDavis_{i}", video[None, :, :, :, :], epoch, fps=10)
+            #if (epoch % vis_all_n_epoch) == 4:
+            #    if (i % 10) == 0:
+            #        video = create_tap_vid(pred)
+            #        writer.add_video(f"TapVidDavis_{i}", video[None, :, :, :, :], epoch, fps=10)
 
         writer.add_scalar("AVGThreshold", thr_acc/n, epoch)
         writer.add_scalar("OCCAccuracy", occ/n, epoch)
         writer.add_scalar("AVGJaccard", jac/n, epoch)
+
+        print("AVGThreshold", thr_acc/n )
+        print("OCCAccuracy", occ/n)
+        print("AVGJaccard", jac/n)
 
         return jac / n
 
 
 
 def train(model, train_loader, val_loader, loss_fnct, optimiser, writer, n_steps, device):
-    steps_per_epoch = 500
+    steps_per_epoch = 20
     loss_sum = 0
     iter = 0
     best_perf = 0
@@ -105,7 +109,7 @@ def main():
     lr = 0.00001
     wedecay = 0.00001
     batch_size = 1
-    n_steps = 10_001
+    n_steps = 1_001
 
     seed = 42
     seed_everything(seed)
