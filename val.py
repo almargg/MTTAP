@@ -25,7 +25,7 @@ def validate(model, loader, device):
             
 
             trajs_pred, vis_pred, confidence_pred = model(frames.to(device), qrs.to(device))
-            trajs_pred, vis_pred = trajs_pred.cpu(), vis_pred.cpu()
+            trajs_pred, vis_pred, confidence_pred = trajs_pred.cpu(), vis_pred.cpu(), confidence_pred.cpu()
 
 
             gt = TapData(
