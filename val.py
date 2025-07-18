@@ -48,7 +48,7 @@ def validate(model, loader, device):
             loss = track_loss_with_confidence(trajs[0], vsbls[0], trajs_pred[0], vis_pred[0], confidence_pred[0], qrs[0])
             print(f"Loss: {loss}")
 
-            vis_against_gt(pred, gt)
+            #vis_against_gt(pred, gt)
             avg_thrh_acc, avg_occ_acc, avg_jac = compute_metrics(gt, pred)
             thr_acc += avg_thrh_acc
             occ += avg_occ_acc
