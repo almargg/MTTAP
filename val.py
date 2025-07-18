@@ -40,6 +40,10 @@ def validate(model, loader, device):
                 vis_pred,
                 qrs
             )
+            #Print all devices
+            print(f"Device: {frames.device}, {trajs.device}, {vsbls.device}, {qrs.device}, "
+                  f"{trajs_pred.device}, {vis_pred.device}, {confidence_pred.device}") 
+
 
             loss = track_loss_with_confidence(trajs[0], vsbls[0], trajs_pred[0], vis_pred[0], confidence_pred[0], qrs[0])
             print(f"Loss: {loss}")
