@@ -16,7 +16,7 @@ def track_loss(tracks_gt: torch.Tensor, vis_gt: torch.Tensor, tracks_pred: torch
     valid: Tensor of shape (S, N) indicating valid samples
     """
     S, N, _ = tracks_gt.shape
-    gamma = 0.95
+    gamma = 0.80
     weight_vis = 1
     weight_invis = 0.2
     use_dicount = True
@@ -44,7 +44,7 @@ def vis_loss(vis_gt: torch.Tensor, vis_pred: torch.Tensor, valid: torch.Tensor):
     valid: Tensor of shape (S, N) indicating valid samples
     """
     S, N = vis_gt.shape
-    gamma = 0.95
+    gamma = 0.80
     weights = torch.pow(gamma, torch.arange(0, S-1, 1, device=vis_gt.device))
     use_discount = False
 
@@ -80,20 +80,24 @@ def confidence_loss(tracks_gt: torch.Tensor, vis_gt: torch.Tensor, tracks_pred: 
     return torch.mean(bce[valid])
 
     
-def track_loss_with_confidence(tracks_gt: torch.Tensor, vis_gt: torch.Tensor, tracks_pred: torch.Tensor, vis_pred: torch.Tensor, conf_pred: torch.Tensor, valid: torch.Tensor):
+def track_loss_with_confidence(tracks_gt: torch.Tensor, vis_gt: torch.Tensor, tracks_pred: torch.Tensor, vis_pred: torch.Tensor, conf_pred: torch.Tensor, qrs: torch.Tensor):
     """
     tracks_gt: Tensor of shape (S, N, 2) with ground truth track positions
     vis_gt: Tensor of shape (S, N) with ground truth visibility values
     tracks_pred: Tensor of shape (S, N, 2) with predicted track positions
     vis_pred: Tensor of shape (S, N) with predicted visibility values
     conf_pred: Tensor of shape (S, N) with predicted confidence values
-    valid: Tensor of shape (S, N) indicating valid samples
+    qrs: Tensor of shape (N, 3) 
     """
 
     # Print the shape of all inputs
     #print(f"tracks_gt shape: {tracks_gt.shape}, vis_gt shape: {vis_gt.shape}, "
     #      f"tracks_pred shape: {tracks_pred.shape}, vis_pred shape: {vis_pred.shape}, "
     #      f"conf_pred shape: {conf_pred.shape}, valid shape: {valid.shape}", flush=True)    
+
+    valid = torch.zeros(tracks_gt.shape[0], tracks_gt.shape[1], dtype=torch.bool)
+    for j in range(tracks_gt.shape[0]):
+        valid[j, :] = qrs[:, 0] >= j
                                                                
     track_weight = 0.05
     vis_weight = 1.0 # 0.7

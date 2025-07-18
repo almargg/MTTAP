@@ -3,8 +3,8 @@
 #SBATCH --mail-type=ALL                           # mail configuration: NONE, BEGIN, END, FAIL, REQUEUE, ALL
 #SBATCH --output=/home/amarugg/Documents/logs/%j.out     # where to store the output (%j is the JOBID), subdirectory "log" must exist
 #SBATCH --error=/home/amarugg/Documents/logs/%j.err  # where to store error messages
-#SBATCH --gres=gpu:a6000:1
 #SBATCH --mem=80G
+#SBATCH --gres=gpu:a6000:1
 
 # Exit on errors
 set -o errexit

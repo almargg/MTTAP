@@ -8,7 +8,7 @@ from dataset.Dataloader import TapvidDavisFirst, TapvidRgbStacking, TapData
 from utils.Metrics import compute_metrics
 from cotracker.cotracker.predictor import CoTrackerOnlinePredictor, CoTrackerPredictor
 from trainOnKubric import track_video
-from models.Model import DepthTracker
+from models.Model import DepthTracker, DepthTrackerOnline
 
 davis_dat = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
 davis = torch.utils.data.DataLoader(davis_dat, batch_size=1, shuffle=False)
@@ -28,34 +28,38 @@ else:
 
 #cotracker = CoTrackerOnlinePredictor(
 #                checkpoint="/scratch_net/biwidl304/amarugg/cotracker/ckpt/scaled_online.pth",
-#                v2=False,
-#                offline=False,
-#                window_len=8,
+#               v2=False,
+#               offline=False,
+#                window_len=16,
 #            ).to(device)
 
-#cotracker = CoTrackerPredictor(
-#                checkpoint="/scratch_net/biwidl304/amarugg/cotracker/ckpt/trained/cotracker_three_final.pth",
-#                v2=False,
-#                offline=True,
-#                window_len=60,
-#            ).to(device)
+cotracker = CoTrackerPredictor(
+                checkpoint="/scratch_net/biwidl304/amarugg/cotracker/ckpt/trained/saved_ckpts/model_cotracker_three_050001.pth",
+                v2=False,
+                offline=True,
+                window_len=60,
+            ).to(device)
 
-online_tracker = DepthTracker().to(device)
+online_tracker = DepthTrackerOnline(device)
 
-#cotracker.eval()
-
-
+cotracker.eval()
 
 
-d = {}
+use_cotracker = False
+
 #stepsize = cotracker.step
-
+n_videos = 0
+n_frames = 0
 used_time = 0
 with torch.no_grad():
+    #autocast to bfloat16
+    #with torch.autocast(device_type=device, dtype=torch.bfloat16):
     for i, dataset in enumerate(datasets):
         predictions = []
         gts = []
         for j, (frames, trajs, vsbls, qrs) in enumerate(dataset):
+            n_videos += 1
+            n_frames += frames.shape[1]
 
             video_resolution = frames.shape[3:] #H,W    
             gt = TapData(
@@ -66,10 +70,8 @@ with torch.no_grad():
             )
             gts.append(gt)
 
-            #qrs[:,:,1] *= frames.shape[4]
-            #qrs[:,:,2] *= frames.shape[3]
-            #qrs = qrs.to(device)
-            #frames = frames.to(device)
+            qrs = qrs.to(device)
+            frames = frames.to(device)
 
             if device == "cuda":
                 torch.cuda.synchronize()
@@ -77,32 +79,35 @@ with torch.no_grad():
             #cotracker(video_chunk=frames, is_first_step=True, grid_size=0, queries=qrs, add_support_grid=True)
             #for ind in range(0, frames.shape[1] - (cotracker.step * 2) + 1, 1):
             #    pred_tracks, pred_visibility = cotracker(video_chunk=frames[:,ind : ind + cotracker.step * 2], grid_size=0, queries=qrs, add_support_grid=True)
-            #pred_tracks, pred_visibility = cotracker(video=frames, grid_size=0, queries=qrs)
-            trajs_pred, vis_pred, confidence_pred, _, times = track_video(online_tracker, frames[0], qrs[0], device)
+
+            if use_cotracker:
+                pred_tracks, pred_visibility = cotracker(video=frames, grid_size=0, queries=qrs)
+            else:
+                pred_tracks, pred_visibility = online_tracker(frames, qrs)
             if device == "cuda":
                 torch.cuda.synchronize()
             end = time.time()
             used_time += end - start
 
-            for key in times:
-                if key not in d:
-                    d[key] = 0
-                d[key] += times[key]
+            #for key in times:
+            #    if key not in d:
+            #        d[key] = 0
+            #    d[key] += times[key]
 
-            tracks = trajs_pred.cpu().numpy()
-            pred_occ = vis_pred[0].cpu()
-            """
+            #tracks = trajs_pred.cpu().numpy()
+            #pred_occ = vis_pred[0].cpu()
+            
             data = TapData(
             video=frames.cpu(),
-            trajectory=torch.from_numpy(tracks),
-            visibility=pred_occ[None,:,:],
+            trajectory=pred_tracks.detach().cpu(),
+            visibility=pred_visibility.detach().cpu(),
             query=qrs.cpu()
             )
             predictions.append(data)
 
-            if j % 5 == 0:
-                name = f"{dataset_names[i]}_cot_{j}.gif"
-                path = os.path.join("/scratch_net/biwidl304/amarugg/files/videos", name)
+            #if j % 5 == 0:
+            #    name = f"{dataset_names[i]}_cot_{j}.gif"
+            #    path = os.path.join("/scratch_net/biwidl304/amarugg/files/videos", name)
                 #save_tap_vid(data, path)
         avg_thrh_acc =  0
         avg_occ_acc = 0
@@ -120,8 +125,9 @@ with torch.no_grad():
         print("Occlusion accuracy ", avg_occ_acc / samples)
         print("AVG Jaccard ", avg_jac / samples)
         print("\n")
-        """
-for key in d:
-    print(f"{key}: {d[key]} seconds")
+        
+#for key in d:
+#    print(f"{key}: {d[key]} seconds")
+print(f"Total videos: {n_videos}, Total frames: {n_frames}")
 print("Time taken: ", used_time)
         

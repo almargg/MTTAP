@@ -2,7 +2,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 import os
-from dataset.Dataloader import KubricDataset, TapvidDavisFirst, TapData
+from dataset.Dataloader import KubricDataset, TapvidDavisFirst, TapData, seed_everything
 from models.Model import DepthTracker
 from models.utils.Loss import  track_loss_with_confidence
 from utils.Metrics import compute_metrics, compute_avg_distance
@@ -40,23 +40,20 @@ def track_video(model, frames, qrs, device):
     confidence_pred = torch.zeros(S, N, device=device)
     valids = torch.zeros(S, N, device=device) == 1
 
-    keys = ["feature_extraction", "data_preparation", "corr_input", "embds",  "transformer"]
-    d = {key: 0 for key in keys}
-
     
     model.reset_tracker() #Reset the model tracker for each batch
     new_ptns, mask = get_new_queries(qrs, 0)
     model.init_tracker(frames[0,:,:,:], new_ptns) #Initialize the model with the first frame and queries
     for j in range(1, S, 1): #Iterate over frames
-        coords, vis, confidence, times = model(frames[j,:,:,:]) #Run the model on the current frame
+        coords, vis, confidence = model(frames[j,:,:,:]) #Run the model on the current frame
         trajs_pred[j][mask] = coords
         vis_pred[j][mask] = vis
         confidence_pred[j][mask] = confidence
 
-        for key in times:
-            if key not in d:
-                d[key] = 0
-            d[key] += times[key]
+        #for key in times:
+        #    if key not in d:
+        #        d[key] = 0
+        #    d[key] += times[key]
 
         valids[j][mask] = True
         new_ptns, tmp_msk = get_new_queries(qrs, j) #Get new queries for the current frame
@@ -66,7 +63,7 @@ def track_video(model, frames, qrs, device):
         mask = mask | tmp_msk 
         model.add_tracks(new_ptns)
         
-    return trajs_pred, vis_pred, confidence_pred, valids, d
+    return trajs_pred, vis_pred, confidence_pred, valids
 
 
 def validate(model, loader, writer: SummaryWriter, epoch, device):
@@ -79,8 +76,8 @@ def validate(model, loader, writer: SummaryWriter, epoch, device):
 
         for i, (frames, trajs, vsbls, qrs) in enumerate(loader):
 
-            trajs_pred, vis_pred, confidence_pred, _, timings = track_video(model, frames[0], qrs[0], device)
-            trajs_pred, vis_pred, confidence_pred = trajs_pred.cpu()[None], vis_pred.cpu()[None], confidence_pred.cpu()[None]
+            trajs_pred, vis_pred, confidence_pred = model(frames.to(device), qrs.to(device))
+            trajs_pred, vis_pred, confidence_pred = trajs_pred.cpu(), vis_pred.cpu(), confidence_pred.cpu()
 
 
             gt = TapData(
@@ -102,7 +99,7 @@ def validate(model, loader, writer: SummaryWriter, epoch, device):
             jac += avg_jac
             n += 1
 
-            if (epoch % vis_all_n_epoch) == 0:
+            if (epoch % vis_all_n_epoch) == 4:
                 if (i % 10) == 0:
                     video = create_tap_vid(pred)
                     writer.add_video(f"TapVidDavis_{i}", video[None, :, :, :, :], epoch, fps=10)
@@ -116,7 +113,7 @@ def validate(model, loader, writer: SummaryWriter, epoch, device):
 
 
 def train(model, train_loader, val_loader, loss_fnct, optimiser, writer, n_steps, device):
-    steps_per_epoch = 1000
+    steps_per_epoch = 500
     loss_sum = 0
     iter = 0
     best_perf = 0
@@ -129,8 +126,9 @@ def train(model, train_loader, val_loader, loss_fnct, optimiser, writer, n_steps
             model.train()
             optimiser.zero_grad()
             #torch.autograd.set_detect_anomaly(True)
-            trajs_pred, vis_pred, confidence_pred, valids, timings = track_video(model, frames[0], qrs[0], device)
-            loss = loss_fnct(trajs.to(device)[0], vsbls.to(device)[0], trajs_pred, vis_pred, confidence_pred, valids)
+            frames, trajs, vsbls, qrs = frames.to(device), trajs.to(device), vsbls.to(device), qrs.to(device)
+            trajs_pred, vis_pred, confidence_pred = model(frames, qrs)
+            loss = loss_fnct(trajs[0], vsbls[0], trajs_pred[0], vis_pred[0], confidence_pred[0], qrs[0])
 
             loss.backward()
             loss_sum += loss.item()
@@ -139,7 +137,8 @@ def train(model, train_loader, val_loader, loss_fnct, optimiser, writer, n_steps
 
             #Validation
             if (steps % steps_per_epoch) == (steps_per_epoch-1):
-                epoch = i // steps_per_epoch
+                print(f"Running validation at step {steps} with loss {loss.item()}")
+                epoch = steps // steps_per_epoch
                 avg_loss = loss_sum / iter
                 writer.add_scalar("Loss/train", avg_loss, epoch)
                 loss_sum = 0
@@ -154,11 +153,17 @@ def train(model, train_loader, val_loader, loss_fnct, optimiser, writer, n_steps
             if steps == n_steps:
                 return
     
-
+#TODO: Add saving for optimiser and sceduler state
+#TODO: Add usage of bfloat and gradient scaling
+#TODO: Fix video saving for tensorboard
 def main():
-    lr = 1e-4
+    lr = 0.0005
+    wedecay = 0.00001
     batch_size = 1
-    n_steps = 20_001
+    n_steps = 10_001
+
+    seed = 42
+    seed_everything(seed)
 
     now = datetime.now()
     now_str = now.strftime(("%d.%m.%Y_%H:%M:%S"))
@@ -169,7 +174,7 @@ def main():
     train_dataset = KubricDataset("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/kubric/kubric_movi_f_120_frames_dense/movi_f")
     val_dataset = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, num_workers=1, prefetch_factor=1, shuffle=False)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, num_workers=2, prefetch_factor=2, shuffle=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=1, prefetch_factor=1)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -180,7 +185,8 @@ def main():
 
     loss_fnct = track_loss_with_confidence
 
-    optimiser = torch.optim.AdamW(model.parameters(), lr=lr)
+    optimiser = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wedecay, eps=1e-8)
+
 
     validate(model, val_loader, writer, -1, device)
     train(model, train_loader, val_loader, loss_fnct, optimiser, writer, n_steps, device)

@@ -81,9 +81,8 @@ class TapData:
 
 
 class KubricDataset(torch.utils.data.Dataset):
-    def __init__(self, data_root, n_traj=256, n_frames=30, random_frame_rate=False):
-        seed = 42
-        seed_everything(seed)
+    def __init__(self, data_root, n_traj=256, n_frames=20, random_frame_rate=False):
+        #TODO: ADD per worker seed
         self.data_root = data_root
         assert n_traj < 2048, "To many trajectories"
         self.n_traj = n_traj
@@ -96,7 +95,7 @@ class KubricDataset(torch.utils.data.Dataset):
         ]
         #TODO: Shuffle sequence names
         self.seq_names = sorted(self.seq_names) 
-        random.shuffle(self.seq_names)
+        #random.shuffle(self.seq_names)
         print("found %d unique videos in %s" % (len(self.seq_names), data_root))
         rgb_path = os.path.join(self.data_root, self.seq_names[0], "frames")
         self.image_paths = sorted(os.listdir(rgb_path))
