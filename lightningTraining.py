@@ -40,6 +40,7 @@ class LightningTraining(pl.LightningModule):
     def __init__(self):
         super().__init__()
         #self.save_hyperparameters()
+        #TODO: Try to compile the model
         self.model = DepthTracker()
         self.loss_fn = track_loss_with_confidence
 
@@ -114,9 +115,10 @@ trainer = pl.Trainer(
     
 )
 
-
+#TODO: Try Accumulated Gradients, Gradient Clipping, Stochastic Weight Average, learning rate finder
 #TODO: Add early stopping callback for average jaccard
 #TODO: Add argument parser instead of defines
+#TODO: ADD auto wall-time resubmission
 model = LightningTraining()
 dm = CoTrackerDataset(batch_size=1)
 
