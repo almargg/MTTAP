@@ -12,7 +12,7 @@ class DepthTracker(nn.Module):
         self,
         
     ):
-        super().__init__()
+        super(DepthTracker, self).__init__()
         self.window_len = 16
         self.cotracker = CoTrackerThreeOnline(
             stride=4, corr_radius=3, window_len=self.window_len
@@ -53,7 +53,7 @@ class DepthTracker(nn.Module):
         self.cotracker.load_state_dict(torch.load(path, map_location=self.device))
 
             
-
+"""
 class DepthTrackerOnline(nn.Module):
     def __init__(
         self,
@@ -186,7 +186,7 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
             visibilities > thr,
         )
     
-
+"""
 class CoTrackerThreeBase(nn.Module):
     def __init__(
         self,

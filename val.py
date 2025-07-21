@@ -3,7 +3,7 @@ from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 import os
 from dataset.Dataloader import KubricDataset, TapvidDavisFirst, TapData
-from models.Model import DepthTracker, DepthTrackerOnline
+from models.Model import DepthTracker
 from models.utils.Loss import  track_loss_with_confidence
 from utils.Metrics import compute_metrics, compute_avg_distance
 from utils.Visualise import create_tap_vid, vis_against_gt
