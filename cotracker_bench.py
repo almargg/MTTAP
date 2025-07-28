@@ -7,8 +7,7 @@ from dataset.Dataloader import TapvidDavisFirst, TapvidRgbStacking, TapData
 #from utils.Visualise import save_tap_vid
 from utils.Metrics import compute_metrics
 from cotracker.cotracker.predictor import CoTrackerOnlinePredictor, CoTrackerPredictor
-from trainOnKubric import track_video
-from models.Model import DepthTracker, DepthTrackerOnline
+from models.Model import OnlineTracker
 
 davis_dat = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
 davis = torch.utils.data.DataLoader(davis_dat, batch_size=1, shuffle=False)
@@ -26,26 +25,29 @@ else:
     print("WARNING NO GPU AVAILABLE")
 
 
-#cotracker = CoTrackerOnlinePredictor(
-#                checkpoint="/scratch_net/biwidl304/amarugg/cotracker/ckpt/scaled_online.pth",
-#               v2=False,
-#               offline=False,
-#                window_len=16,
-#            ).to(device)
+cotracker_online = CoTrackerOnlinePredictor(
+                checkpoint="/scratch_net/biwidl304/amarugg/cotracker/ckpt/scaled_online.pth",
+               v2=False,
+               offline=False,
+                window_len=16,
+            ).to(device)
 
 cotracker = CoTrackerPredictor(
-                checkpoint="/scratch_net/biwidl304/amarugg/cotracker/ckpt/trained/saved_ckpts/model_cotracker_three_050001.pth",
+                checkpoint="/scratch_net/biwidl304/amarugg/cotracker/ckpt/trained/model_cotracker_three_150001.pth",
                 v2=False,
                 offline=True,
                 window_len=60,
             ).to(device)
 
-online_tracker = DepthTrackerOnline(device)
+#online_tracker = DepthTrackerOnline(device)
+online_tracker = OnlineTracker().to(device)
 
+online_tracker.eval()
 cotracker.eval()
+cotracker_online.eval()
 
 
-use_cotracker = False
+use_cotracker = True
 
 #stepsize = cotracker.step
 n_videos = 0
@@ -76,18 +78,33 @@ with torch.no_grad():
             if device == "cuda":
                 torch.cuda.synchronize()
             start = time.time()
-            #cotracker(video_chunk=frames, is_first_step=True, grid_size=0, queries=qrs, add_support_grid=True)
-            #for ind in range(0, frames.shape[1] - (cotracker.step * 2) + 1, 1):
-            #    pred_tracks, pred_visibility = cotracker(video_chunk=frames[:,ind : ind + cotracker.step * 2], grid_size=0, queries=qrs, add_support_grid=True)
+            
+            print(f"Processing video {j}, with shape {frames.shape}", flush=True)
+            
+            pred_tracks, pred_visibility = cotracker(video=frames, grid_size=0, queries=qrs)
+            #else:
+            #    pred_tracks, pred_visibility = online_tracker(frames, qrs)
+            if device == "cuda":
+                torch.cuda.synchronize()
+            intermediate1 = time.time()
+            
 
-            if use_cotracker:
-                pred_tracks, pred_visibility = cotracker(video=frames, grid_size=0, queries=qrs)
-            else:
-                pred_tracks, pred_visibility = online_tracker(frames, qrs)
+            pred_tracks, pred_visibility, pred_confidence = online_tracker.track_vid(frames, qrs)
+
+            if device == "cuda":
+                torch.cuda.synchronize()
+            intermediate2 = time.time()
+
+            cotracker_online(video_chunk=frames, is_first_step=True, grid_size=0, queries=qrs, add_support_grid=True)
+            for ind in range(0, frames.shape[1] - (cotracker_online.step * 2), cotracker_online.step):
+                pred_tracks, pred_visibility = cotracker_online(video_chunk=frames[:,ind : ind + cotracker_online.step * 2], grid_size=0, queries=qrs, add_support_grid=True)
+
+
             if device == "cuda":
                 torch.cuda.synchronize()
             end = time.time()
-            used_time += end - start
+
+            print(f"Time used for video {i}: CoTracker: {intermediate1 - start} seconds, Online Tracker: {intermediate2 - intermediate1} seconds, CoTracker Online: {end - intermediate2} seconds", flush=True)
 
             #for key in times:
             #    if key not in d:
