@@ -48,7 +48,7 @@ class LightningTraining(pl.LightningModule):
             param.requires_grad = False
 
         self.loss_fn = track_loss_with_confidence
-        self.lr = 1e-6
+        self.lr = 1e-8
         self.wd = 1e-6
 
     def forward(self, frames, qrs): 
@@ -118,7 +118,7 @@ class LightningTraining(pl.LightningModule):
             self.optimizer,
             max_lr=self.lr,
             total_steps=n_steps,
-            pct_start=0.05,
+            pct_start=0.1,
             anneal_strategy='cos',
             cycle_momentum=False
         )
