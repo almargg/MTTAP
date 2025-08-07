@@ -1,7 +1,7 @@
 import torch
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.strategies import DDPStrategy
-from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor
 
 from models.Model import OnlineTracker
 from models.utils.Loss import track_loss_with_confidence
@@ -31,31 +31,45 @@ class CoTrackerDataset(pl.LightningDataModule):
     
     #def load_state_dict(self, state_dict):
     #    super().load_state_dict(state_dict)
+    
+
 
 class LightningTraining(pl.LightningModule):
     def __init__(self):
         super().__init__()
         #self.save_hyperparameters()
         #TODO: Try to compile the model
+
         self.model = OnlineTracker()
         self.model.load()
+        #freeze layers of fnet
+        for param in self.model.fnet.parameters():
+            param.requires_grad = False
+
         self.loss_fn = track_loss_with_confidence
-        self.lr = 1e-7
-        self.wd = 1e-5
+        self.lr = 5e-9
+        self.wd = 1e-6
 
     def forward(self, frames, qrs): 
         return self.model.track_vid(frames, qrs)
 
     def training_step(self, batch, batch_idx):
         frames, trajs, vsbls, qrs = batch
+
+        # Skip batches with less than 128 tracks
+        #if trajs.shape[2] < 128:
+        #    print(f"Skipping batch with {trajs.shape[2]} tracks, less than 128", flush=True)
+        #    return None
         trajs_pred, vis_pred, confidence_pred = self(frames, qrs)
         
         # Assuming trajs and vsbls are the ground truth tensors
         loss = self.loss_fn(trajs[0], vsbls[0], trajs_pred[0], vis_pred[0], confidence_pred[0], qrs[0])
-        
+
         self.log('train_loss', loss)
+
         return loss
-    
+        
+
     def validation_step(self, batch, batch_idx):
         #if self.trainer.global_rank != 0:
         #    print(f"Skipping validation step for non-master process with idx {batch_idx}", flush=True)
@@ -94,29 +108,49 @@ class LightningTraining(pl.LightningModule):
     
     def configure_optimizers(self):
 
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=self.wd, eps=1e-8)
-        n_steps = 100000
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=self.wd, eps=1e-8)
+        #optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr, weight_decay=self.wd, momentum=0.9)
+        n_steps = 100000 
         print(f"Estimated stepping batches: {n_steps}", flush=True)
-        
+
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
+            self.optimizer,
             max_lr=self.lr,
             total_steps=n_steps,
-            pct_start=0.05,
+            pct_start=0.4,
             anneal_strategy='cos',
             cycle_momentum=False
         )
-        return optimizer
+        return {
+            'optimizer': self.optimizer,
+            'lr_scheduler': {
+                'scheduler': self.scheduler,
+                'interval': 'step',
+                'frequency': 1,
+            }
+        }
         
     
-    def lr_scheduler_step(self):
-        if hasattr(self, 'scheduler'):
-            self.scheduler.step()
-        else:
-            print("No scheduler found, skipping step", flush=True)
-        
-        
+    def lr_scheduler_step(self, scheduler, optimiser_idx=None, metric=None):
+        # This method is called at the end of each training step
+        scheduler.step()
 
+
+    #def on_after_backward(self):
+        # Log gradients after backward pass
+        #for name, param in self.model.named_parameters():
+        #    if param.grad is not None:
+        #        self.logger.experiment.add_histogram(f'gradients/{name}', param.grad, self.global_step)
+
+
+        
+        
+# Set to mixed
+#Check gpu generation to see if we can use bfloat16
+if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
+    float_precision = 'bf16'
+else:
+    float_precision = 16
 
 if IS_SANITY_CHECK:
     trainer = pl.Trainer(overfit_batches=1)
@@ -126,20 +160,27 @@ trainer = pl.Trainer(
     devices=-1 if torch.cuda.is_available() else 1,
     num_nodes=NUM_NODES,
     accelerator="gpu" if torch.cuda.is_available() else "cpu",
-    precision="bf16" if (MIXED_PRECISION and torch.cuda.is_available()) else 32,
+    precision= float_precision if (MIXED_PRECISION and torch.cuda.is_available()) else 32,
     default_root_dir="/scratch_net/biwidl304/amarugg/gluTracker/weights",
     val_check_interval= 1000, #After how many training steps to run validation
-    max_epochs=1,
+    max_epochs=50,
     callbacks=[
-        EarlyStopping(
-            monitor='avg_jac',
-            mode='max',
-            patience=12, # Roughly 2 epochs
-            verbose=True
-        ),
+        #EarlyStopping(
+        #    monitor='avg_jac',
+        #    mode='max',
+        #    patience=12, # Roughly 2 epochs
+        #    verbose=True
+        #),
         LearningRateMonitor(logging_interval='step'),
+        #ModelCheckpoint(
+        #    monitor="val_loss",  # Track validation loss
+        #    mode="min",        # Smaller validation loss is better
+        #    save_top_k=2,      # Save the top 2 models
+        #    dirpath="checkpoints/", # Directory to save checkpoints
+        #    filename="model-{epoch:02d}-{val_loss:.2f}"  # Filename format
+        #),
     ],
-    auto_lr_find=True,
+    
 )
 
 
@@ -151,8 +192,9 @@ model = LightningTraining()
 dm = CoTrackerDataset(batch_size=1)
 
 
-# Run initial validation
-trainer.validate(model, datamodule=dm)
+# Run initial validation if we are on GPU and do real training
+if torch.cuda.is_available():
+    trainer.validate(model, datamodule=dm)
 
 if RESUME_TRAINING:
     trainer.fit(model, datamodule=dm, ckpt_path="/scratch_net/biwidl304/amarugg/gluTracker/weights/checkpoint.ckpt")

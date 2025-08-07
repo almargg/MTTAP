@@ -13,12 +13,12 @@ def track_loss(tracks_gt: torch.Tensor, vis_gt: torch.Tensor, tracks_pred: torch
     vis_gt: Tensor of shape (S, N) with ground truth visibility values
     tracks_pred: Tensor of shape (S, N, 2) with predicted track positions
     vis_pred: Tensor of shape (S, N) with predicted visibility values
-    valid: Tensor of shape (S, N) indicating valid samples
+    valid: Tensor of shape (S, N) indicating valid samples (the ones that come after the query frame)
     """
     S, N, _ = tracks_gt.shape
-    gamma = 0.80
+    gamma = 0.95
     weight_vis = 1
-    weight_invis = 0.2
+    weight_invis = 0.1
     use_discount = True
     # tracks_pred and tracks_gt are of shape (S, N, 2)
 
@@ -28,7 +28,7 @@ def track_loss(tracks_gt: torch.Tensor, vis_gt: torch.Tensor, tracks_pred: torch
 
     loss = huber_loss(tracks_pred, tracks_gt)
     # loss[vs_msk] *= weight_vis
-    # loss[~vs_msk] *= weight_invis
+    loss[~vs_msk] *= weight_invis
     
 
     #visible_loss = huber_loss(tracks_pred[vs_msk], tracks_gt[vs_msk]) * weight_vis
@@ -52,7 +52,7 @@ def vis_loss(vis_gt: torch.Tensor, vis_pred: torch.Tensor, valid: torch.Tensor):
     valid: Tensor of shape (S, N) indicating valid samples
     """
     S, N = vis_gt.shape
-    gamma = 0.80
+    gamma = 0.95
     weights = torch.pow(gamma, torch.arange(0, S-1, 1, device=vis_gt.device))
     use_discount = False
 
@@ -112,8 +112,8 @@ def track_loss_with_confidence(tracks_gt: torch.Tensor, vis_gt: torch.Tensor, tr
         valid[j, :] = qrs[:, 0] <= j
                                                                
     track_weight = 0.1
-    vis_weight = 0 #1.0 # 0.7
-    conf_weight = 0 #1.0 # 2.0
+    vis_weight = 0.25 # 0.7
+    conf_weight = 0.25 # 2.0
 
     loss_track = track_loss(tracks_gt, vis_gt, tracks_pred, vis_pred, valid)
     loss_vis = vis_loss(vis_gt, vis_pred, valid)

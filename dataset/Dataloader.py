@@ -2,7 +2,6 @@ import torch
 import os
 import numpy as np
 import pickle
-import matplotlib.pyplot as plt
 from typing import Mapping
 from dataclasses import dataclass
 import random
@@ -80,7 +79,7 @@ class TapData:
 
 
 class KubricDataset(torch.utils.data.Dataset):
-    def __init__(self, data_root, n_traj=256, n_frames=20, random_frame_rate=False):
+    def __init__(self, data_root, n_traj=256, n_frames=5, random_frame_rate=False):
         #TODO: ADD per worker seed
         self.data_root = data_root
         assert n_traj < 2048, "To many trajectories"
@@ -237,76 +236,3 @@ class TapvidRgbStacking(torch.utils.data.Dataset):
         rgbs = resize_video(rgbs)
         return rgbs.float(), trajs.float(), visibles.float(), query_points.float()
     
-if __name__=="__main__":
-    def safe_video(frames, traj, vis):
-        output_dir = "/scratch_net/biwidl304/amarugg/cotracker/saved_videos/overlays"
-        seed = 42
-        B, S, C, H, W = frames.shape
-        N = traj.shape[2]
-
-        video = frames.detach().cpu()
-        trajectory = traj.detach().cpu()
-        visibility = vis.detach().cpu()
-
-        random.seed(seed)
-        cmap = {
-            n: (random.random(), random.random(), random.random())
-            for n in range(N)
-        }
-
-        for b in range(B):
-            for s in range(S):
-                frame = video[b, s].permute(1, 2, 0).numpy()  # C, H, W -> H, W, C
-                frame = frame / 255
-                frame = np.clip(frame, 0, 1)
-
-                plt.figure(figsize=(H / 100, W / 100), dpi=100)
-                plt.imshow(frame)
-                plt.axis('off')
-
-                for n in range(N):
-                    x, y = trajectory[b, s, n]
-                    x *= W
-                    y *= H
-                    is_visible = visibility[b, s, n].item() > 0.5
-                    color = cmap[n]
-
-                    plt.scatter(
-                        x, y,
-                        c=[color],
-                        alpha=1.0 if is_visible else 0,
-                        s=20,
-                        edgecolors='black'
-                    )
-                plt.savefig(f"{output_dir}/batch{b}_frame{s}.png", bbox_inches='tight', pad_inches=0)
-                plt.close()
-
-    #Test dataset
-    train_dataset = KubricDataset("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/kubric/kubric_movi_f_120_frames_dense/movi_f")
-    val_dataset = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
-    rgb_stack = TapvidRgbStacking("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_rgb_stacking/tapvid_rgb_stacking.pkl")
-
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=False)
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=1, shuffle=False)
-    rgb_loader = torch.utils.data.DataLoader(rgb_stack, batch_size=1, shuffle=False)
-
-    for i, (frames, trajs, vsbls, qrs) in enumerate(rgb_loader):
-
-        print("Max Value in x axis: ", torch.max(qrs[:,:,1]), " and in y axis: ", torch.max(qrs[:,:,2]))
-
-        print("Frames: Shape ", frames.shape, " dtype: ", frames.dtype, " and ranging from ", torch.min(frames), " to ", torch.max(frames))
-        print("Trajectories: Shape ", trajs.shape, " dtype: ", trajs.dtype, " and ranging from ", torch.min(trajs), " to ", torch.max(trajs))
-        print("Visibles: Shape ", vsbls.shape, " dtype: ", vsbls.dtype, " and ranging from ", torch.min(vsbls), " to ", torch.max(vsbls))
-        print("Queries: Shape ", qrs.shape, " dtype: ", qrs.dtype, " and ranging from ", torch.min(qrs), " to ", torch.max(qrs))
-
-        for j in range(qrs.shape[1]):
-            qry_coord = [qrs[(0,j,1)], qrs[(0,j,2)]]
-            t = qrs[0,j,0].int()
-            point_coord = [trajs[(0,t,j,0)], trajs[(0,t, j, 1)]]
-            if not(qry_coord[0] == point_coord[0] and qry_coord[1] == point_coord[1]):
-                print("ERROR with query point ", qry_coord, " and track ", point_coord)
-
-        if i == 0:
-            safe_video(frames, trajs, vsbls)
-            
-            break

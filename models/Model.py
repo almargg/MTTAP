@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from models.utils.Modules import BasicEncoder, EfficientUpdateFormer, Mlp
 import numpy as np
-from dataclasses import dataclass
+import os
 from models.utils.util import posenc, get_1d_sincos_pos_embed_from_grid, bilinear_sampler, get_points_on_a_grid, sample_features5d
 
 
@@ -53,140 +53,7 @@ class DepthTracker(nn.Module):
         self.cotracker.load_state_dict(torch.load(path, map_location=self.device))
 
             
-"""
-class DepthTrackerOnline(nn.Module):
-    def __init__(
-        self,
-        device,
-    ):
-        super().__init__()
-        self.window_len = 16
-        self.cotracker = CoTrackerOnlinePredictor(checkpoint="/scratch_net/biwidl304/amarugg/cotracker/ckpt/scaled_online.pth",
-            window_len=self.window_len,
-        ).to(device)
-        self.device = device
 
-    def track_video(self, video, queries):
-        B, S, C, H, W = video.shape
-        B, N, D = queries.shape
-
-        video = video.to(self.device)
-        queries = queries.to(self.device)
-
-        #Pad video with window lenght times first frame
-        #padding = video[:, 0:1].repeat(1, self.window_len - 1, 1, 1, 1)
-        #video = torch.cat([padding, video], dim=1)
-
-        tracks = torch.zeros((B, S, N, 2), device=self.device)
-        visibility = torch.zeros((B, S, N), device=self.device)
-
-        #for n in range(N):
-        #    if queries[0, n, 0] > 0:
-        #        queries[0, n, 0] += self.window_len - 1
-
-        self.cotracker(video_chunk=video, is_first_step=True, queries=queries)
-        for ind in range(0, video.shape[1] - (self.cotracker.step * 2) + 1, 1):
-            pred_tracks, pred_visibility = self.cotracker(video_chunk=video[:,ind : ind + self.cotracker.step * 2], queries=queries)
-            if ind == 0:
-                tracks[:, :self.cotracker.step * 2, :, :] = pred_tracks[:, :, :, :]
-                visibility[:, :self.cotracker.step * 2, :] = pred_visibility[:, :, :]
-            idx = ind + self.cotracker.step * 2 - 1
-            tracks[:, idx, :, :] = pred_tracks[:, -1, :, :]  # Get the last step predictions
-            visibility[:, idx, :] = pred_visibility[:, -1, :]  # Get the last step predictions
-
-        
-        return tracks, visibility
-
-
-    def forward(self, video, queries):
-        pred_tracks, pred_visibility = self.track_video(video, queries)
-        return pred_tracks, pred_visibility
-    
-
-        
-    
-
-class CoTrackerOnlinePredictor(torch.nn.Module):
-    def __init__(
-        self,
-        checkpoint: str = None,
-        window_len=16,
-    ):
-        super().__init__()
-        self.support_grid_size = 6
-        model = CoTrackerThreeOnline(
-                stride=4, corr_radius=3, window_len=window_len
-            )
-        #Load the model from the checkpoint
-        if checkpoint is not None:
-            with open(checkpoint, "rb") as f:
-                state_dict = torch.load(f, map_location="cpu")
-                time_emb = state_dict["time_emb"]
-                unused = (16 - window_len) // 2
-                time_emb = time_emb[:,unused:16-unused,:]
-                state_dict["time_emb"] = time_emb
-                if "model" in state_dict:
-                    state_dict = state_dict["model"]
-        model.load_state_dict(state_dict)
-        torch.save(model.state_dict(), "/scratch_net/biwidl304/amarugg/gluTracker/weights/depth_Tracker_final.pth")
-
-        self.interp_shape = model.model_resolution
-        self.step = model.window_len // 2
-        self.model = model
-        self.model.eval()
-
-    @torch.no_grad()
-    def forward(
-        self,
-        video_chunk,
-        is_first_step: bool = False,
-        queries: torch.Tensor = None,
-    ):
-        B, T, C, H, W = video_chunk.shape
-        # Initialize online video processing and save queried points
-        # This needs to be done before processing *each new video*
-        if is_first_step:
-            self.model.init_video_online_processing()
-            B, N, D = queries.shape
-            self.N = N
-            assert D == 3
-            queries = queries.clone()
-            queries[:, :, 1:] *= queries.new_tensor(
-                [
-                    (self.interp_shape[1] - 1) / (W - 1),
-                    (self.interp_shape[0] - 1) / (H - 1),
-                ]
-            )
-            
-            self.queries = queries
-            return (None, None)
-
-        video_chunk = video_chunk.reshape(B * T, C, H, W)
-        video_chunk = F.interpolate(
-            video_chunk, tuple(self.interp_shape), mode="bilinear", align_corners=True
-        )
-        video_chunk = video_chunk.reshape(
-            B, T, 3, self.interp_shape[0], self.interp_shape[1]
-        )
-        
-        tracks, visibilities, confidence = self.model(
-            video=video_chunk, queries=self.queries, iters=2
-        )
-            
-        visibilities = visibilities * confidence
-        thr = 0.6
-        return (
-            tracks
-            * tracks.new_tensor(
-                [
-                    (W - 1) / (self.interp_shape[1] - 1),
-                    (H - 1) / (self.interp_shape[0] - 1),
-                ]
-            ),
-            visibilities > thr,
-        )
-    
-"""
 class CoTrackerThreeBase(nn.Module):
     def __init__(
         self,
@@ -588,3 +455,234 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
         conf_predicted = torch.sigmoid(conf_predicted)
 
         return coords_predicted, vis_predicted, conf_predicted
+
+
+class OnlineTracker(CoTrackerThreeBase):
+    def __init__(self, **args):
+        super(OnlineTracker, self).__init__(**args)
+        self.window_len = 16
+        
+
+    def set_fmaps_pyramid(self, frame):
+        B, C, H, W = frame.shape
+        S = self.window_len
+
+        fmaps = self.fnet(frame)
+        fmaps = fmaps.permute(0, 2, 3, 1)
+        fmaps = fmaps / torch.sqrt(
+            torch.maximum(
+                torch.sum(torch.square(fmaps), axis=-1, keepdims=True),
+                torch.tensor(1e-12, device=fmaps.device),
+            )
+        )
+        fmaps = fmaps.permute(0, 3, 1, 2).unsqueeze(1) # B 1 C H W
+        if self.fmaps_pyramid == None:
+            self.fmaps_pyramid = []
+            self.fmaps_pyramid.append(fmaps.repeat(1, S, 1, 1, 1))  # B S C H W
+            for i in range(self.corr_levels - 1):
+                fmaps_ = fmaps.squeeze(1)
+                fmaps_ = F.avg_pool2d(fmaps_, 2, stride=2)
+                fmaps = fmaps_.unsqueeze(1)  # B 1 C H W
+                self.fmaps_pyramid.append(fmaps.repeat(1, S, 1, 1, 1))
+            # Remove gradient tracking for all but last entry
+            for i in range(len(self.fmaps_pyramid) - 1):
+                for j in range(S - 1):
+                    self.fmaps_pyramid[i][:, j, :, :, :] = self.fmaps_pyramid[i][:, j, :, :, :].detach()
+        else:
+            self.fmaps_pyramid[0] = torch.cat((self.fmaps_pyramid[0][:, 1:], fmaps), dim=1)  # B S C H W
+            for i in range(1, self.corr_levels):
+                fmaps_ = fmaps.squeeze(1)
+                fmaps_ = F.avg_pool2d(fmaps_, 2, stride=2)
+                fmaps = fmaps_.unsqueeze(1)  # B 1 C H W
+                self.fmaps_pyramid[i] = torch.cat((self.fmaps_pyramid[i][:, 1:], fmaps), dim=1)
+
+    def add_track_support(self, queries):
+        B, N, _ = queries.shape
+        device = self.fmaps_pyramid[0].device
+        queried_frames = torch.tensor([self.window_len-1]).repeat(queries.shape[0], queries.shape[1]).to(device)  # B N
+        queried_coords = queries / self.stride
+        
+        for i in range(self.corr_levels):
+            track_feat_support = self.get_track_feat(
+                self.fmaps_pyramid[i],
+                queried_frames,
+                queried_coords / 2**i,
+                support_radius=self.corr_radius,
+            )
+            track_feat_support = track_feat_support.unsqueeze(1)  # B 1 N (2*r+1)^2 C
+
+            if self.online_track_support[i] is None:
+                #TODO: remove clone()
+                self.online_track_support[i] = track_feat_support.clone()
+
+            else:
+                self.online_track_support[i] = torch.cat((self.online_track_support[i], track_feat_support.clone()), dim=3)
+
+    def init_video_processing(self, first_frame, queries):
+        self.fmaps_pyramid = None
+        self.track_coordinates = None
+        self.online_track_support = [None] * self.corr_levels
+
+        self.set_fmaps_pyramid(first_frame)
+        self.add_track_support(queries)
+        self.track_coordinates = queries.repeat(1, self.window_len, 1, 1)  # B S N 2
+        self.track_vis = torch.zeros((queries.shape[0], self.window_len, queries.shape[1]), device=first_frame.device)
+        self.track_conf = torch.zeros((queries.shape[0], self.window_len, queries.shape[1]), device=first_frame.device)
+
+    def add_tracks(self, queries):
+        self.add_track_support(queries)
+        self.track_coordinates = torch.cat((self.track_coordinates, queries.repeat(1, self.window_len, 1, 1)), dim=2)  # B S N 2
+        self.track_vis = torch.cat((self.track_vis, torch.zeros((queries.shape[0], self.window_len, queries.shape[1]), device=queries.device)), dim=2)
+        self.track_conf = torch.cat((self.track_conf, torch.zeros((queries.shape[0], self.window_len, queries.shape[1]), device=queries.device)), dim=2)
+
+    def forward(self, new_frame, iters=2):
+
+        B, C, H, W = new_frame.shape
+        S = self.window_len
+        N = self.track_coordinates.shape[2]
+        r = 2 * self.corr_radius + 1
+
+        frame = 2 * (new_frame / 255.0) - 1.0
+        
+        self.set_fmaps_pyramid(frame)
+        
+        
+        coords = torch.cat((self.track_coordinates[:, 1:, :, :], self.track_coordinates[:, -1:, :, :]), dim=1)  # B S N 2
+        vis = torch.cat((self.track_vis[:, 1:, :], self.track_vis[:, -1:, :]), dim=1)
+        conf = torch.cat((self.track_conf[:, 1:, :], self.track_conf[:, -1:, :]), dim=1)
+
+        coords = coords / self.stride
+
+        #Prepare and execute transformer update
+        for it in range(iters):
+            coords = coords.detach()  # B T N 2
+
+            coords_init = coords.view(B * S, N, 2)
+            corr_embs = []
+            for i in range(self.corr_levels):
+                corr_feat = self.get_correlation_feat(
+                        self.fmaps_pyramid[i], coords_init / 2**i
+                    )
+                track_feat_support = (
+                    self.online_track_support[i]
+                    .view(B, 1, r, r, N, self.latent_dim)
+                    .squeeze(1)
+                    .permute(0, 3, 1, 2, 4)
+                )
+                corr_volume = torch.einsum(
+                    "btnhwc,bnijc->btnhwij", corr_feat, track_feat_support
+                )
+                #print(f"Max and min of corr_volume: {corr_volume.max()} {corr_volume.min()}")
+                corr_emb = self.corr_mlp(corr_volume.reshape(B * S * N, r * r * r * r))
+
+                corr_embs.append(corr_emb)
+
+            corr_embs = torch.cat(corr_embs, dim=-1)
+            corr_embs = corr_embs.view(B, S, N, corr_embs.shape[-1])
+
+            transformer_input = [vis.unsqueeze(-1), conf.unsqueeze(-1), corr_embs]
+
+            rel_coords_forward = coords[:, :-1] - coords[:, 1:]
+            rel_coords_backward = coords[:, 1:] - coords[:, :-1]
+
+            rel_coords_forward = torch.nn.functional.pad(
+                rel_coords_forward, (0, 0, 0, 0, 0, 1)
+            )
+            rel_coords_backward = torch.nn.functional.pad(
+                rel_coords_backward, (0, 0, 0, 0, 1, 0)
+            )
+
+            scale = (
+                torch.tensor(
+                    [self.model_resolution[1], self.model_resolution[0]],
+                    device=coords.device,
+                )
+                / self.stride
+            )
+            rel_coords_forward = rel_coords_forward / scale
+            rel_coords_backward = rel_coords_backward / scale
+
+            rel_pos_emb_input = posenc(
+                torch.cat([rel_coords_forward, rel_coords_backward], dim=-1),
+                min_deg=0,
+                max_deg=10,
+            )  # batch, num_points, num_frames, 84
+            transformer_input.append(rel_pos_emb_input)
+
+            x = (
+                torch.cat(transformer_input, dim=-1)
+                .permute(0, 2, 1, 3)
+                .reshape(B * N, S, -1)
+            )
+
+            x = x + self.interpolate_time_embed(x, S)
+            x = x.view(B, N, S, -1)  # (B N) T D -> B N T D
+
+            delta = self.updateformer(x, add_space_attn=True)
+
+            delta_coords = delta[..., :2].permute(0, 2, 1, 3)
+            delta_vis = delta[..., 2:3].permute(0, 2, 1, 3).squeeze(-1)
+            delta_conf = delta[..., 3:].permute(0, 2, 1, 3).squeeze(-1)
+
+            vis = vis + delta_vis
+            conf = conf + delta_conf
+
+            coords = coords + delta_coords
+            
+
+        self.track_coordinates[:, -1:, :, :] = coords[:, -1:, :, :] * self.stride  # Update the last coordinates
+        #TODO: Change to clamp into values [0,1]
+        self.track_vis[:, -1:, :] = torch.sigmoid(vis[:, -1, :])
+        self.track_conf[:, -1:, :] = torch.sigmoid(conf[:, -1, :])
+
+        return self.track_coordinates[:, -1, :, :], self.track_vis[:, -1, :], self.track_conf[:, -1, :]  
+    
+    def get_new_queries(self, queries, idx):
+        mask = queries[:, :, 0] == idx
+        if mask.sum() == 0:
+            return None, mask
+        new_queries = queries[mask][:, 1:].unsqueeze(0)  # Get the new queries without the frame index
+        return new_queries, mask
+    
+
+    def track_vid(self, video, queries):
+        B, S, C, H, W = video.shape
+        device = video.device
+        new_queries, mask = self.get_new_queries(queries, 0)
+        self.init_video_processing(video[:, 0], new_queries)
+
+        valids = mask
+
+        tracks = torch.zeros((B, S, queries.shape[1], 2), device=device)
+        visibility = torch.zeros((B, S, queries.shape[1]), device=device)
+        confidence = torch.zeros((B, S, queries.shape[1]), device=device)
+
+        tracks[:, 0, :, :][valids] = new_queries
+        visibility[:, 0, :][valids] = torch.ones((B, new_queries.shape[1]), device=device)
+        confidence[:, 0, :][valids] = torch.ones((B, new_queries.shape[1]), device=device)
+
+        for ind in range(1, video.shape[1], 1):
+
+            pred_tracks, pred_visibility, pred_confidence = self(video[:, ind])
+            
+            tracks[:, ind, :,  :][valids] = pred_tracks
+            visibility[:, ind, :][valids] = pred_visibility
+            confidence[:, ind, :][valids] = pred_confidence
+
+            new_queries, mask = self.get_new_queries(queries, ind)
+            if new_queries is not None:
+                tracks[:, ind, :, :][mask] = new_queries
+                visibility[:, ind, :][mask] = torch.ones((B, new_queries.shape[1]), device=device)
+                confidence[:, ind, :][mask] = torch.ones((B, new_queries.shape[1]), device=device)
+                self.add_tracks(new_queries)
+                valids = valids | mask
+
+        return tracks, visibility, confidence
+    
+    def save(self, path="/scratch_net/biwidl304/amarugg/gluTracker/weights/online_tracker.pth"):
+        torch.save(self.state_dict(), path)
+    
+    def load(self, path="/scratch_net/biwidl304/amarugg/gluTracker/weights"):
+        self.fnet.load_state_dict(torch.load(os.path.join(path, "fnet.pth")))
+        self.updateformer.load_state_dict(torch.load(os.path.join(path, "updateformer.pth")))
+        self.corr_mlp.load_state_dict(torch.load(os.path.join(path, "corr_mlp.pth")))

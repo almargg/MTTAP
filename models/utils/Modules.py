@@ -483,7 +483,7 @@ class EfficientUpdateFormer(nn.Module):
         num_virtual_tracks=64,
         add_space_attn=True,
         linear_layer_for_vis_conf=False,
-        only_last=False,
+        only_last=True,
     ):
         super().__init__()
         self.out_channels = 2
