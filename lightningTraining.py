@@ -47,7 +47,7 @@ class LightningTraining(pl.LightningModule):
             param.requires_grad = False
 
         self.loss_fn = track_loss_with_confidence
-        self.lr = 5e-9
+        self.lr = 1e-6
         self.wd = 1e-6
 
     def forward(self, frames, qrs): 
@@ -83,11 +83,11 @@ class LightningTraining(pl.LightningModule):
         self.log('val_loss', loss, sync_dist=True)
 
         gt = TapData(
-                frames.cpu(),
-                trajs.cpu(),
-                vsbls.cpu(),
-                qrs.cpu()
-            )
+            frames.cpu(),
+            trajs.cpu(),
+            vsbls.cpu(),
+            qrs.cpu()
+        )
         pred = TapData(
             frames.cpu(),
             trajs_pred.cpu(),
@@ -110,14 +110,14 @@ class LightningTraining(pl.LightningModule):
 
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=self.wd, eps=1e-8)
         #optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr, weight_decay=self.wd, momentum=0.9)
-        n_steps = 100000 
+        n_steps = 200000 
         print(f"Estimated stepping batches: {n_steps}", flush=True)
 
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
             max_lr=self.lr,
             total_steps=n_steps,
-            pct_start=0.4,
+            pct_start=0.05,
             anneal_strategy='cos',
             cycle_momentum=False
         )
