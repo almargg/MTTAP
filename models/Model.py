@@ -684,5 +684,5 @@ class OnlineTracker(CoTrackerThreeBase):
     
     def load(self, path="/scratch_net/biwidl304/amarugg/gluTracker/weights"):
         self.fnet.load_state_dict(torch.load(os.path.join(path, "fnet.pth")))
-        self.updateformer.load_state_dict(torch.load(os.path.join(path, "updateformer.pth")))
-        self.corr_mlp.load_state_dict(torch.load(os.path.join(path, "corr_mlp.pth")))
+        #self.updateformer.load_state_dict(torch.load(os.path.join(path, "updateformer.pth")))
+        #self.corr_mlp.load_state_dict(torch.load(os.path.join(path, "corr_mlp.pth")))

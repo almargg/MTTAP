@@ -48,7 +48,7 @@ class LightningTraining(pl.LightningModule):
             param.requires_grad = False
 
         self.loss_fn = track_loss_with_confidence
-        self.lr = 1e-8
+        self.lr = 5e-8
         self.wd = 1e-6
 
     def forward(self, frames, qrs): 
