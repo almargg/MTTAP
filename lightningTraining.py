@@ -17,7 +17,8 @@ class CoTrackerDataset(pl.LightningDataModule):
     def __init__(self, batch_size=1):
         super().__init__()
         self.batch_size = batch_size
-        self.train_dataset = KubricDataset("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/kubric/kubric_movi_f_120_frames_dense/movi_f")
+        self.train_dataset = KubricDataset("/srv/beegfs02/scratch/alex_project/data/kubric/kubric_movi_f_120_frames_dense/movi_f")
+        #self.train_dataset = KubricDataset("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/kubric/kubric_movi_f_120_frames_dense/movi_f")
         self.val_dataset = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
 
     def train_dataloader(self):
