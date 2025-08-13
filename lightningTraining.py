@@ -17,8 +17,8 @@ class CoTrackerDataset(pl.LightningDataModule):
     def __init__(self, batch_size=1):
         super().__init__()
         self.batch_size = batch_size
-        self.train_dataset = KubricDataset("/srv/beegfs02/scratch/alex_project/data/kubric/kubric_movi_f_120_frames_dense/movi_f")
-        #self.train_dataset = KubricDataset("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/kubric/kubric_movi_f_120_frames_dense/movi_f")
+        #self.train_dataset = KubricDataset("/srv/beegfs02/scratch/alex_project/data/kubric/kubric_movi_f_120_frames_dense/movi_f")
+        self.train_dataset = KubricDataset("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/kubric/kubric_movi_f_120_frames_dense/movi_f")
         self.val_dataset = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
 
     def train_dataloader(self):
@@ -143,11 +143,11 @@ class LightningTraining(pl.LightningModule):
         scheduler.step()
 
 
-    #def on_after_backward(self):
+    def on_after_backward(self):
         # Log gradients after backward pass
-        #for name, param in self.model.named_parameters():
-        #    if param.grad is not None:
-        #        self.logger.experiment.add_histogram(f'gradients/{name}', param.grad, self.global_step)
+        for name, param in self.model.named_parameters():
+            if param.grad is not None:
+                self.logger.experiment.add_histogram(f'gradients/{name}', param.grad, self.global_step)
 
 
         
@@ -171,6 +171,7 @@ trainer = pl.Trainer(
     default_root_dir="/scratch_net/biwidl304/amarugg/gluTracker/weights",
     val_check_interval= 1000, #After how many training steps to run validation
     max_epochs=50,
+    #gradient_clip_val=0.5,
     callbacks=[
         #EarlyStopping(
         #    monitor='avg_jac',
