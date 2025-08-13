@@ -79,7 +79,7 @@ class TapData:
 
 
 class KubricDataset(torch.utils.data.Dataset):
-    def __init__(self, data_root, n_traj=256, n_frames=5, random_frame_rate=False):
+    def __init__(self, data_root, n_traj=256, n_frames=2, random_frame_rate=False):
         #TODO: ADD per worker seed
         self.data_root = data_root
         assert n_traj < 2048, "To many trajectories"
@@ -126,13 +126,12 @@ class KubricDataset(torch.utils.data.Dataset):
 
         annot_dict = np.load(npy_path, allow_pickle=True).item()
         trajs = annot_dict["coords"][:,idxs]
-        #trajs[:,:,0] /= rgbs.shape[2]
-        #trajs[:,:,1] /= rgbs.shape[3]
         visibility = annot_dict["visibility"][:,idxs]
-        #depths = annot_dict["depth"][:,idxs]
 
         trajs[:,:,0] *= VIDEO_INPUT_RESO_CV[0] / rgbs.shape[3]  # Rescale x-coordinates to image width
         trajs[:,:,1] *= VIDEO_INPUT_RESO_CV[1] / rgbs.shape[2]  # Rescale y-coordinates to image height
+
+        rgbs = resize_video(torch.from_numpy(rgbs))
 
         converted = sample_queries_first(visibility, trajs, rgbs)
 
@@ -145,10 +144,7 @@ class KubricDataset(torch.utils.data.Dataset):
         ].permute(
             1, 0
         )  # T, N
-        #depths = torch.from_numpy(depths).permute(1, 0)  # T, N
-        # Sample tracks
 
-        #TODO: Select random number of trajectories
         n_trajs = trajs.shape[1]
         if n_trajs < self.n_traj:
             print(
@@ -161,10 +157,8 @@ class KubricDataset(torch.utils.data.Dataset):
             trajs = trajs[:, n_idxs]
             visibles = visibles[:, n_idxs]
             query_points = query_points[n_idxs]
-            #depths = depths[:, n_idxs]
 
-        rgbs = resize_video(torch.from_numpy(rgbs))
-        return rgbs.float(), trajs.float(), visibles.float(), query_points.float()#, depths.float()
+        return rgbs.float(), trajs.float(), visibles.float(), query_points.float()
 
 class TapvidDavisFirst(torch.utils.data.Dataset):
     def __init__(self, data_root):

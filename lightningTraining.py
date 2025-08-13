@@ -3,7 +3,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.strategies import DDPStrategy
 
-from models.Model import OnlineTracker
+from models.Model import OnlineTracker, CoTrackerThreeOnline
 from models.utils.Loss import track_loss_with_confidence
 from utils.Metrics import compute_metrics
 from dataset.Dataloader import KubricDataset, TapvidDavisFirst, TapData
@@ -22,7 +22,7 @@ class CoTrackerDataset(pl.LightningDataModule):
         self.val_dataset = TapvidDavisFirst("/scratch_net/biwidl304_second/amarugg/kubric_movi_f/tapvid/tapvid_davis/tapvid_davis.pkl")
 
     def train_dataloader(self):
-        return torch.utils.data.DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=False, num_workers=4, prefetch_factor=2)
+        return torch.utils.data.DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=4, prefetch_factor=2)
 
     def val_dataloader(self):
         return torch.utils.data.DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=4, prefetch_factor=2)
@@ -41,6 +41,10 @@ class LightningTraining(pl.LightningModule):
         #self.save_hyperparameters()
         #TODO: Try to compile the model
 
+        #self.model = CoTrackerThreeOnline(stride=4, corr_radius=3, window_len=16)
+        #load fnet and freeze it
+        #self.model.fnet.load_state_dict(torch.load("/scratch_net/biwidl304/amarugg/gluTracker/weights/fnet.pth"))
+        #self.model.fnet.eval()
         self.model = OnlineTracker()
         self.model.load()
         #freeze layers of fnet
@@ -48,11 +52,13 @@ class LightningTraining(pl.LightningModule):
             param.requires_grad = False
 
         self.loss_fn = track_loss_with_confidence
-        self.lr = 5e-8
-        self.wd = 1e-6
+        self.lr = 2e-5#0.0001 #5e-8
+        self.wd = 0.00001#1e-6
 
     def forward(self, frames, qrs): 
         return self.model.track_vid(frames, qrs)
+        #trajs_pred, vis_pred, conf_pred, train = self.model(frames, qrs)
+        #return trajs_pred, vis_pred, conf_pred
 
     def training_step(self, batch, batch_idx):
         frames, trajs, vsbls, qrs = batch

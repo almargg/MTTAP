@@ -16,7 +16,7 @@ def track_loss(tracks_gt: torch.Tensor, vis_gt: torch.Tensor, tracks_pred: torch
     valid: Tensor of shape (S, N) indicating valid samples (the ones that come after the query frame)
     """
     S, N, _ = tracks_gt.shape
-    gamma = 0.95
+    gamma = 0.5
     weight_vis = 1
     weight_invis = 0.1
     use_discount = True
@@ -52,14 +52,14 @@ def vis_loss(vis_gt: torch.Tensor, vis_pred: torch.Tensor, valid: torch.Tensor):
     valid: Tensor of shape (S, N) indicating valid samples
     """
     S, N = vis_gt.shape
-    gamma = 0.95
-    weights = torch.pow(gamma, torch.arange(0, S-1, 1, device=vis_gt.device))
-    use_discount = False
+    gamma = 0.5
+    weights = torch.pow(gamma, torch.arange(0, S, 1, device=vis_gt.device))
+    use_discount = True
 
     # Clamp visibility predictions to avoid log(0)
 
     #Compute average distance between predicted and ground truth visibility
-    diff = torch.abs(vis_gt - vis_pred)
+    #diff = torch.abs(vis_gt - vis_pred)
     #print(f"Visibility Loss: {diff.mean()}", flush=True)
     vis_pred = torch.clamp(vis_pred, min=0, max=1)
 
@@ -78,6 +78,11 @@ def confidence_loss(tracks_gt: torch.Tensor, vis_gt: torch.Tensor, tracks_pred: 
     conf_pred: Tensor of shape (S, N) with predicted confidence values
     valid: Tensor of shape (S, N) indicating valid samples
     """
+    S, N = vis_gt.shape
+    gamma = 0.5
+    weights = torch.pow(gamma, torch.arange(0, S, 1, device=vis_gt.device))
+    use_discount = True
+
     expected_dist_thresh = 12
     err = torch.sum(torch.square(tracks_gt - tracks_pred), dim=2)  # S, N
     within_thresh = (err < expected_dist_thresh**2).to(torch.int8)  # S, N
@@ -89,6 +94,10 @@ def confidence_loss(tracks_gt: torch.Tensor, vis_gt: torch.Tensor, tracks_pred: 
 
     #TODO also use invisible samples
     bce = bce * vis_gt
+
+    if use_discount:
+        bce = bce * weights[:, None]
+
     return torch.mean(bce[valid])
 
     
@@ -113,7 +122,7 @@ def track_loss_with_confidence(tracks_gt: torch.Tensor, vis_gt: torch.Tensor, tr
                                                                
     track_weight = 0.1
     vis_weight = 0.25 # 0.7
-    conf_weight = 0.25 # 2.0
+    conf_weight = 1.0 # 2.0
 
     loss_track = track_loss(tracks_gt, vis_gt, tracks_pred, vis_pred, valid)
     loss_vis = vis_loss(vis_gt, vis_pred, valid)

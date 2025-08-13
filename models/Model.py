@@ -485,9 +485,9 @@ class OnlineTracker(CoTrackerThreeBase):
                 fmaps = fmaps_.unsqueeze(1)  # B 1 C H W
                 self.fmaps_pyramid.append(fmaps.repeat(1, S, 1, 1, 1))
             # Remove gradient tracking for all but last entry
-            for i in range(len(self.fmaps_pyramid) - 1):
-                for j in range(S - 1):
-                    self.fmaps_pyramid[i][:, j, :, :, :] = self.fmaps_pyramid[i][:, j, :, :, :].detach()
+            #for i in range(len(self.fmaps_pyramid) - 1):
+            #    for j in range(S - 1):
+            #        self.fmaps_pyramid[i][:, j, :, :, :] = self.fmaps_pyramid[i][:, j, :, :, :].detach()
         else:
             self.fmaps_pyramid[0] = torch.cat((self.fmaps_pyramid[0][:, 1:], fmaps), dim=1)  # B S C H W
             for i in range(1, self.corr_levels):
@@ -547,15 +547,15 @@ class OnlineTracker(CoTrackerThreeBase):
         self.set_fmaps_pyramid(frame)
         
         
-        coords = torch.cat((self.track_coordinates[:, 1:, :, :], self.track_coordinates[:, -1:, :, :]), dim=1)  # B S N 2
-        vis = torch.cat((self.track_vis[:, 1:, :], self.track_vis[:, -1:, :]), dim=1)
-        conf = torch.cat((self.track_conf[:, 1:, :], self.track_conf[:, -1:, :]), dim=1)
+        coords = torch.cat((self.track_coordinates[:, 1:, :, :], self.track_coordinates[:, -1:, :, :]), dim=1).detach().clone()  # B S N 2
+        vis = torch.cat((self.track_vis[:, 1:, :], self.track_vis[:, -1:, :]), dim=1).detach().clone()  # B S N
+        conf = torch.cat((self.track_conf[:, 1:, :], self.track_conf[:, -1:, :]), dim=1).detach().clone()
 
         coords = coords / self.stride
 
         #Prepare and execute transformer update
         for it in range(iters):
-            coords = coords.detach()  # B T N 2
+            #coords = coords.detach()  # B T N 2
 
             coords_init = coords.view(B * S, N, 2)
             corr_embs = []
@@ -579,6 +579,8 @@ class OnlineTracker(CoTrackerThreeBase):
 
             corr_embs = torch.cat(corr_embs, dim=-1)
             corr_embs = corr_embs.view(B, S, N, corr_embs.shape[-1])
+            #for i in range(S-1):
+            #    corr_embs[:, i, :, :] = corr_embs[:, i, :, :].detach().clone()  # Detach all but last frame
 
             transformer_input = [vis.unsqueeze(-1), conf.unsqueeze(-1), corr_embs]
 
@@ -624,18 +626,23 @@ class OnlineTracker(CoTrackerThreeBase):
             delta_vis = delta[..., 2:3].permute(0, 2, 1, 3).squeeze(-1)
             delta_conf = delta[..., 3:].permute(0, 2, 1, 3).squeeze(-1)
 
-            vis = vis + delta_vis
-            conf = conf + delta_conf
+            vis[:,-1,:] = vis[:,-1,:] + delta_vis[:,-1,:]
+            conf[:,-1,:] = conf[:,-1,:] + delta_conf[:,-1,:]
 
-            coords = coords + delta_coords
-            
+            coords[:, -1, :, :] = coords[:, -1, :, :] + delta_coords[:, -1, :, :] 
 
-        self.track_coordinates[:, -1:, :, :] = coords[:, -1:, :, :] * self.stride  # Update the last coordinates
+        self.track_coordinates = coords * self.stride  # Update the last coordinates
         #TODO: Change to clamp into values [0,1]
-        self.track_vis[:, -1:, :] = torch.sigmoid(vis[:, -1, :])
-        self.track_conf[:, -1:, :] = torch.sigmoid(conf[:, -1, :])
+        self.track_vis = vis
+        self.track_conf = conf
+
+        self.track_vis[:, -1, :] = torch.sigmoid(self.track_vis[:, -1, :])
+        self.track_conf[:, -1, :] = torch.sigmoid(self.track_conf[:, -1, :])
+
+        #print(f"Requires grad: {self.track_coordinates.requires_grad}, {self.track_vis.requires_grad}, {self.track_conf.requires_grad}")
 
         return self.track_coordinates[:, -1, :, :], self.track_vis[:, -1, :], self.track_conf[:, -1, :]  
+    
     
     def get_new_queries(self, queries, idx):
         mask = queries[:, :, 0] == idx
@@ -644,38 +651,73 @@ class OnlineTracker(CoTrackerThreeBase):
         new_queries = queries[mask][:, 1:].unsqueeze(0)  # Get the new queries without the frame index
         return new_queries, mask
     
-
+    
     def track_vid(self, video, queries):
+
         B, S, C, H, W = video.shape
         device = video.device
+        N = queries.shape[1]
+
         new_queries, mask = self.get_new_queries(queries, 0)
         self.init_video_processing(video[:, 0], new_queries)
 
         valids = mask
 
-        tracks = torch.zeros((B, S, queries.shape[1], 2), device=device)
-        visibility = torch.zeros((B, S, queries.shape[1]), device=device)
-        confidence = torch.zeros((B, S, queries.shape[1]), device=device)
+        tracks_list = []
+        visibility_list = []
+        confidence_list = []    
 
-        tracks[:, 0, :, :][valids] = new_queries
-        visibility[:, 0, :][valids] = torch.ones((B, new_queries.shape[1]), device=device)
-        confidence[:, 0, :][valids] = torch.ones((B, new_queries.shape[1]), device=device)
+        tracks = torch.zeros((B, queries.shape[1], 2), device=device)
+        visibility = torch.zeros((B, queries.shape[1]), device=device)
+        confidence = torch.zeros((B, queries.shape[1]), device=device)
+
+
+        tracks[valids] = new_queries
+        visibility[valids] = torch.ones((B, new_queries.shape[1]), device=device)
+        confidence[valids] = torch.ones((B, new_queries.shape[1]), device=device)
+        
+        #Try to remove clone()
+        tracks_list.append(tracks.clone())
+        visibility_list.append(visibility.clone())
+        confidence_list.append(confidence.clone())
+
 
         for ind in range(1, video.shape[1], 1):
 
+            tracks = torch.zeros((B, queries.shape[1], 2), device=device)
+            visibility = torch.zeros((B, queries.shape[1]), device=device)
+            confidence = torch.zeros((B, queries.shape[1]), device=device)
+
             pred_tracks, pred_visibility, pred_confidence = self(video[:, ind])
-            
-            tracks[:, ind, :,  :][valids] = pred_tracks
-            visibility[:, ind, :][valids] = pred_visibility
-            confidence[:, ind, :][valids] = pred_confidence
+
+            for b in range(B):
+                idx = 0
+                for n in range(N):
+                    if valids[b, n]:
+                        tracks[b, n] = pred_tracks[b, idx].clone()
+                        visibility[b, n] = pred_visibility[b, idx].clone()
+                        confidence[b, n] = pred_confidence[b, idx].clone()
+                        idx += 1
+
+            #tracks = torch.where(valids, pred_tracks, tracks)
+            #visibility = torch.where(valids, pred_visibility, visibility)
+            #confidence = torch.where(valids, pred_confidence, confidence)
 
             new_queries, mask = self.get_new_queries(queries, ind)
             if new_queries is not None:
-                tracks[:, ind, :, :][mask] = new_queries
-                visibility[:, ind, :][mask] = torch.ones((B, new_queries.shape[1]), device=device)
-                confidence[:, ind, :][mask] = torch.ones((B, new_queries.shape[1]), device=device)
+                tracks[:, :, :][mask] = new_queries
+                visibility[:, :][mask] = torch.ones((B, new_queries.shape[1]), device=device)
+                confidence[:, :][mask] = torch.ones((B, new_queries.shape[1]), device=device)
                 self.add_tracks(new_queries)
                 valids = valids | mask
+
+            tracks_list.append(tracks.clone())
+            visibility_list.append(visibility.clone())
+            confidence_list.append(confidence.clone())
+        
+        tracks = torch.stack(tracks_list, dim=1)  # B S N 2
+        visibility = torch.stack(visibility_list, dim=1)  # B S N
+        confidence = torch.stack(confidence_list, dim=1)  # B S N
 
         return tracks, visibility, confidence
     
@@ -684,5 +726,5 @@ class OnlineTracker(CoTrackerThreeBase):
     
     def load(self, path="/scratch_net/biwidl304/amarugg/gluTracker/weights"):
         self.fnet.load_state_dict(torch.load(os.path.join(path, "fnet.pth")))
-        #self.updateformer.load_state_dict(torch.load(os.path.join(path, "updateformer.pth")))
-        #self.corr_mlp.load_state_dict(torch.load(os.path.join(path, "corr_mlp.pth")))
+        self.updateformer.load_state_dict(torch.load(os.path.join(path, "updateformer.pth")))
+        self.corr_mlp.load_state_dict(torch.load(os.path.join(path, "corr_mlp.pth")))
